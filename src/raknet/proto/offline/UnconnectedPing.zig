@@ -16,7 +16,7 @@ pub const UnconnectedPing = struct {
     }
 
     pub fn serialize(self: *UnconnectedPing) []const u8 {
-        const buffer = &[_]u8{0x01};
+        const buffer = &[_]u8{};
         var stream = BinaryStream.init(buffer, 0);
         defer stream.deinit();
         stream.writeUint8(Packets.UnconnectedPing);
