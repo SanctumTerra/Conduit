@@ -19,14 +19,13 @@ pub const UnconnectedPong = struct {
     }
 
     pub fn serialize(self: *UnconnectedPong) []const u8 {
-        const buffer = &[_]u8{0x01};
+        const buffer = &[_]u8{};
         var stream = BinaryStream.init(buffer, 0);
         defer stream.deinit();
         stream.writeUint8(Packets.UnconnectedPong);
         stream.writeInt64(self.timestamp, .Big);
         stream.writeInt64(self.guid, .Big);
         stream.writeMagic();
-        Logger.INFO("Message: {any}", .{self.message});
         stream.writeString16(self.message, .Big);
         const payload = stream.toOwnedSlice() catch {
             Logger.ERROR("Failed to serialize unconnected pong", .{});
