@@ -50,7 +50,6 @@ pub const Advertisement = struct {
             Logger.ERROR("Failed to print advertisement", .{});
             return "";
         };
-        Logger.INFO("Result: {s}", .{result});
         return result;
     }
 };
