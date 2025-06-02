@@ -12,6 +12,10 @@ pub fn getMemoryUsage() void {
     const bytes = allocator.total_requested_bytes;
     const mb = bytes / (1024 * 1024);
     std.debug.print("Memory usage: {} MB\n", .{mb});
+    // const leaks = allocator.detectLeaks();
+    // if (leaks) {
+    // std.process.exit(1);
+    // }
 }
 
 pub fn deinit() std.heap.Check {
