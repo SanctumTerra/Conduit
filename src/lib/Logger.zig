@@ -61,123 +61,55 @@ pub const Logger = struct {
     }
 
     pub fn INFO(comptime fmt: []const u8, args: anytype) void {
-        const stdout = std.io.getStdOut().writer();
         const timestamp = std.time.timestamp();
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
-        // Get all date components
-        // const day = localTime.getDayOfMonth();
-        // const month = @as(u16, @intCast(localTime.getMonth()));
-        // const year = localTime.getYear();
 
-        // Get time components
         const daySeconds = localTime.getDaySeconds();
         const hour = daySeconds.getHoursIntoDay();
         const minute = daySeconds.getMinutesIntoHour();
         const second = daySeconds.getSecondsIntoMinute();
 
         // format: <15:20:08.916> INFO: message
-        stdout.print("{s}<{d:0>2}:{d:0>2}:{d:0>2}> {s}INFO:{s} ", .{ Colors.GRAY, hour, minute, second, Colors.GREEN, Colors.RESET }) catch |err| {
-            std.debug.print("Error while printing INFO: {}\n", .{err});
-            unreachable;
-        };
-        stdout.print(fmt, args) catch |err| {
-            std.debug.print("Error while printing INFO: {}\n", .{err});
-            unreachable;
-        };
-        stdout.print("\n", .{}) catch |err| {
-            std.debug.print("Error while printing INFO: {}\n", .{err});
-            unreachable;
-        };
+        std.debug.print("{s}<{d:0>2}:{d:0>2}:{d:0>2}> {s}INFO:{s} " ++ fmt ++ "\n", .{ Colors.GRAY, hour, minute, second, Colors.GREEN, Colors.RESET } ++ args);
     }
 
     pub fn ERROR(comptime fmt: []const u8, args: anytype) void {
-        const stdout = std.io.getStdOut().writer();
         const timestamp = std.time.timestamp();
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
-        // Get all date components
-        // const day = localTime.getDayOfMonth();
-        // const month = @as(u16, @intCast(localTime.getMonth()));
-        // const year = localTime.getYear();
 
-        // Get time components
         const daySeconds = localTime.getDaySeconds();
         const hour = daySeconds.getHoursIntoDay();
         const minute = daySeconds.getMinutesIntoHour();
         const second = daySeconds.getSecondsIntoMinute();
 
-        // format: <15:20:08.916> INFO: message
-        stdout.print("{s}<{d:0>2}:{d:0>2}:{d:0>2}> {s}ERROR:{s} ", .{ Colors.GRAY, hour, minute, second, Colors.RED, Colors.RESET }) catch |err| {
-            std.debug.print("Error while printing ERROR: {}\n", .{err});
-            unreachable;
-        };
-        stdout.print(fmt, args) catch |err| {
-            std.debug.print("Error while printing ERROR: {}\n", .{err});
-            unreachable;
-        };
-        stdout.print("\n", .{}) catch |err| {
-            std.debug.print("Error while printing ERROR: {}\n", .{err});
-            unreachable;
-        };
+        // format: <15:20:08.916> ERROR: message
+        std.debug.print("{s}<{d:0>2}:{d:0>2}:{d:0>2}> {s}ERROR:{s} " ++ fmt ++ "\n", .{ Colors.GRAY, hour, minute, second, Colors.RED, Colors.RESET } ++ args);
     }
 
     pub fn WARN(comptime fmt: []const u8, args: anytype) void {
-        const stdout = std.io.getStdOut().writer();
         const timestamp = std.time.timestamp();
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
-        // Get all date components
-        // const day = localTime.getDayOfMonth();
-        // const month = @as(u16, @intCast(localTime.getMonth()));
-        // const year = localTime.getYear();
 
-        // Get time components
         const daySeconds = localTime.getDaySeconds();
         const hour = daySeconds.getHoursIntoDay();
         const minute = daySeconds.getMinutesIntoHour();
         const second = daySeconds.getSecondsIntoMinute();
 
-        // format: <15:20:08.916> INFO: message
-        stdout.print("{s}<{d:0>2}:{d:0>2}:{d:0>2}> {s}WARN:{s} ", .{ Colors.GRAY, hour, minute, second, Colors.YELLOW, Colors.RESET }) catch |err| {
-            std.debug.print("Error while printing WARN: {}\n", .{err});
-            unreachable;
-        };
-        stdout.print(fmt, args) catch |err| {
-            std.debug.print("Error while printing WARN: {}\n", .{err});
-            unreachable;
-        };
-        stdout.print("\n", .{}) catch |err| {
-            std.debug.print("Error while printing WARN: {}\n", .{err});
-            unreachable;
-        };
+        // format: <15:20:08.916> WARN: message
+        std.debug.print("{s}<{d:0>2}:{d:0>2}:{d:0>2}> {s}WARN:{s} " ++ fmt ++ "\n", .{ Colors.GRAY, hour, minute, second, Colors.YELLOW, Colors.RESET } ++ args);
     }
 
     pub fn DEBUG(comptime fmt: []const u8, args: anytype) void {
-        const stdout = std.io.getStdOut().writer();
         const timestamp = std.time.timestamp();
         const localTime = std.time.epoch.EpochSeconds{ .secs = @intCast(timestamp) };
-        // Get all date components
-        // const day = localTime.getDayOfMonth();
-        // const month = @as(u16, @intCast(localTime.getMonth()));
-        // const year = localTime.getYear();
 
-        // Get time components
         const daySeconds = localTime.getDaySeconds();
         const hour = daySeconds.getHoursIntoDay();
         const minute = daySeconds.getMinutesIntoHour();
         const second = daySeconds.getSecondsIntoMinute();
 
-        // format: <15:20:08.916> INFO: message
-        stdout.print("{s}<{d:0>2}:{d:0>2}:{d:0>2}> {s}DEBUG:{s} ", .{ Colors.GRAY, hour, minute, second, Colors.BLUE, Colors.RESET }) catch |err| {
-            std.debug.print("Error while printing DEBUG: {}\n", .{err});
-            unreachable;
-        };
-        stdout.print(fmt, args) catch |err| {
-            std.debug.print("Error while printing DEBUG: {}\n", .{err});
-            unreachable;
-        };
-        stdout.print("\n", .{}) catch |err| {
-            std.debug.print("Error while printing DEBUG: {}\n", .{err});
-            unreachable;
-        };
+        // format: <15:20:08.916> DEBUG: message
+        std.debug.print("{s}<{d:0>2}:{d:0>2}:{d:0>2}> {s}DEBUG:{s} " ++ fmt ++ "\n", .{ Colors.GRAY, hour, minute, second, Colors.BLUE, Colors.RESET } ++ args);
     }
 
     /// Returns a formatted time string (HH:MM:SS.mmm).
