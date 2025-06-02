@@ -18,16 +18,20 @@ pub const FrameSet = struct {
         var stream = BinaryStream.init(buffer, 0);
         defer stream.deinit();
         stream.writeUint8(Packets.FrameSet);
+        stream.writeUint24(self.sequence_number, .Little);
         for (self.frames) |frame| {
             frame.write(&stream);
         }
-        return stream.buffer;
+        return stream.toOwnedSlice() catch |err| {
+            Logger.ERROR("Failed to serialize FrameSet: {}", .{err});
+            return &[_]u8{};
+        };
     }
 
     pub fn deserialize(data: []const u8) FrameSet {
         var stream = BinaryStream.init(data, 0);
         defer stream.deinit();
-        stream.skip(1);
+        _ = stream.readUint8();
         const sequence_number = stream.readUint24(.Little);
         const end_position = stream.buffer.items.len;
         var frames = std.ArrayList(Frame).init(CAllocator.get());
