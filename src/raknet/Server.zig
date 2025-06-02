@@ -203,6 +203,11 @@ pub const Server = struct {
                         Logger.ERROR("Failed to put connection: {}", .{err});
                         std.heap.page_allocator.free(key_copy);
                     };
+
+                    // Set server reference in the connection
+                    if (self.connections.getPtr(key_copy)) |conn| {
+                        conn.setServer(self);
+                    }
                 }
             },
             0x80 => {
@@ -211,6 +216,16 @@ pub const Server = struct {
                     Logger.INFO("Connection found", .{});
                 } else {
                     Logger.INFO("Connection not found", .{});
+                }
+            },
+            Packets.Ack => {
+                if (self.connections.getPtr(key)) |conn| {
+                    conn.handleAck(data);
+                }
+            },
+            Packets.Nack => {
+                if (self.connections.getPtr(key)) |conn| {
+                    conn.handleNack(data);
                 }
             },
             0x0e => {
