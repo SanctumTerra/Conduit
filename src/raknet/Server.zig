@@ -17,6 +17,10 @@ const Connection = @import("./Connection.zig").Connection;
 pub const UDP_HEADER_SIZE: u16 = 28;
 pub const MTU_SIZES = [_]u16{ 1492, 1200, 576 };
 pub const MAX_MTU_SIZE: u16 = 1492;
+
+pub const ConenctionCallBack = *const fn (connection: *Connection, context: ?*anyopaque) void;
+pub const DisconnectionCallBack = *const fn (address: std.net.Address, context: ?*anyopaque) void;
+
 const ServerConfig = struct {
     const Self = @This();
     address: []const u8 = "0.0.0.0",
@@ -49,6 +53,10 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     running: std.atomic.Value(bool),
     maintenance_thread: ?std.Thread,
+    connection_callback: ?ConenctionCallBack = null,
+    connection_context: ?*anyopaque = null,
+    disconnection_callback: ?DisconnectionCallBack = null,
+    disconnection_context: ?*anyopaque = null,
 
     pub fn init(config: ServerConfig) !Self {
         return Self{
@@ -62,7 +70,6 @@ pub const Server = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        // Stop maintenance thread if running
         if (self.running.load(.acquire)) {
             self.running.store(false, .release);
             if (self.maintenance_thread) |thread| {
@@ -71,17 +78,46 @@ pub const Server = struct {
         }
 
         self.config.deinit();
-        if (self.socket) |socket| {
+        if (self.socket) |*socket| {
             socket.deinit();
         }
 
-        // Free all connection keys
+        var deactivate_iter = self.connections.iterator();
+        while (deactivate_iter.next()) |entry| {
+            entry.value_ptr.deactivate();
+        }
+
+        var connections_to_remove = std.ArrayList([]const u8).init(self.allocator);
+        defer connections_to_remove.deinit();
+
         var it = self.connections.iterator();
         while (it.next()) |entry| {
-            // Free the key memory
-            std.heap.page_allocator.free(entry.key_ptr.*);
+            connections_to_remove.append(entry.key_ptr.*) catch |err| {
+                Logger.ERROR("Failed to add connection key to removal list: {}", .{err});
+                continue;
+            };
         }
+
+        for (connections_to_remove.items) |key| {
+            if (self.connections.getPtr(key)) |conn| {
+                var conn_copy = conn.*;
+                _ = self.connections.remove(key);
+                conn_copy.deinit();
+            }
+            std.heap.page_allocator.free(key);
+        }
+
         self.connections.deinit();
+    }
+
+    pub fn setConnectionCallback(self: *Self, callback: ConenctionCallBack, context: ?*anyopaque) void {
+        self.connection_callback = callback;
+        self.connection_context = context;
+    }
+
+    pub fn setDisconnectionCallback(self: *Self, callback: DisconnectionCallBack, context: ?*anyopaque) void {
+        self.disconnection_callback = callback;
+        self.disconnection_context = context;
     }
 
     fn maintenanceLoop(server: *Self) void {
@@ -90,7 +126,7 @@ pub const Server = struct {
             while (it.next()) |entry| {
                 entry.value_ptr.tick();
             }
-            std.time.sleep(std.time.ns_per_ms * 50);
+            std.time.sleep(std.time.ns_per_ms * 10);
         }
         Logger.INFO("Maintenance thread stopped", .{});
     }
@@ -99,19 +135,19 @@ pub const Server = struct {
         var prng = std.Random.DefaultPrng.init(@as(u64, @intCast(std.time.milliTimestamp())));
         self.config.advertisement.guid = prng.random().int(i64);
         self.socket = Socket.init(self.allocator, self.config.address, self.config.port) catch |err| {
-            Logger.ERROR("Failed to create socket: {}", .{err});
+            Logger.ERROR("Failed to create socket: {s}", .{@errorName(err)});
             return;
         };
 
         self.socket.?.listen() catch |err| {
-            Logger.ERROR("Failed to listen: {}", .{err});
+            Logger.ERROR("Failed to listen: {s}", .{@errorName(err)});
             return;
         };
 
-        self.socket.?.setCallback(callback, self);
+        self.socket.?.setCallback(packet_callback, self);
         self.running.store(true, .release);
         self.maintenance_thread = std.Thread.spawn(.{}, maintenanceLoop, .{self}) catch |err| {
-            Logger.ERROR("Failed to spawn maintenance thread: {}", .{err});
+            Logger.ERROR("Failed to spawn maintenance thread: {s}", .{@errorName(err)});
             return;
         };
     }
@@ -120,26 +156,22 @@ pub const Server = struct {
         self.running.store(false, .release);
     }
 
-    pub fn callback(data: []const u8, from_addr: std.net.Address, context: ?*anyopaque) void {
+    pub fn packet_callback(data: []const u8, from_addr: std.net.Address, context: ?*anyopaque, allocator: std.mem.Allocator) void {
         const server = @as(*Self, @ptrCast(@alignCast(context)));
-        defer {
-            // Log data length
-            Callocator.get().free(data);
-            // Logger.INFO("| {any} | ", .{data.len});
-        }
+        defer allocator.free(data);
         server.handlePacket(data, from_addr);
     }
 
     pub fn getAddressAsKey(self: *Self, address: std.net.Address) []const u8 {
         _ = self;
         var buf: [48]u8 = undefined;
-        const formatted = std.fmt.bufPrint(&buf, "{}", .{address}) catch |err| {
-            Logger.ERROR("Failed to format address: {}", .{err});
+        const formatted = std.fmt.bufPrint(&buf, "{any}", .{address}) catch |err| {
+            Logger.ERROR("Failed to format address: {s}", .{@errorName(err)});
             return &[_]u8{};
         };
 
         return std.fmt.allocPrint(std.heap.page_allocator, "{s}", .{formatted}) catch |err| {
-            Logger.ERROR("Failed to allocate key: {}", .{err});
+            Logger.ERROR("Failed to allocate key: {s}", .{@errorName(err)});
             return &[_]u8{};
         };
     }
@@ -148,63 +180,61 @@ pub const Server = struct {
         var ID: u8 = data[0];
         if (ID & 0xF0 == 0x80) ID = 0x80;
         const key = self.getAddressAsKey(from_addr);
-        // Logger.INFO("Key: {s}", .{key});
+        defer std.heap.page_allocator.free(key); // Always free the temporary lookup key
 
         switch (ID) {
             Packets.UnconnectedPing => {
-                // NOTE! We do not need to handle Pings, as they provide no necessary information.
                 const string = self.config.advertisement.toString();
+                defer Callocator.get().free(string);
+
                 var pong = UnconnectedPong.init(
                     std.time.milliTimestamp(),
                     self.config.advertisement.guid,
                     string,
                 );
                 const pong_data = pong.serialize();
-                self.send(pong_data, from_addr);
-                Callocator.get().free(string);
                 defer Callocator.get().free(pong_data);
+
+                self.send(pong_data, from_addr);
             },
             Packets.OpenConnectionRequest1 => {
-                // const request = ConnectionRequest1.deserialize(data);
-                // NOTE! No need to free this, as its not allocated.
                 var reply = ConnectionReply1.init(
                     self.config.advertisement.guid,
                     false,
                     1492,
                 );
                 const reply_data = reply.serialize();
-                self.send(reply_data, from_addr);
                 defer Callocator.get().free(reply_data);
+                self.send(reply_data, from_addr);
             },
             Packets.OpenConnectionRequest2 => {
                 const request = ConnectionRequest2.deserialize(data);
-                Logger.INFO("Connection request 2: {any}", .{request});
                 defer request.address.deinit(Callocator.get());
                 const address = Address.init(4, "0.0.0.0", 0);
+
                 var reply = ConnectionReply2.init(
                     self.config.advertisement.guid,
                     address,
-                    1492,
+                    request.mtu_size,
                     false,
                 );
                 const reply_data = reply.serialize();
-                self.send(reply_data, from_addr);
                 defer Callocator.get().free(reply_data);
+                self.send(reply_data, from_addr);
+
                 if (self.connections.get(key)) |_| {
                     Logger.INFO("Connection already exists", .{});
                 } else {
-                    Logger.INFO("Creating new connection", .{});
-                    // Make a copy of the key before storing it in the hash map
                     const key_copy = std.heap.page_allocator.dupe(u8, key) catch |err| {
-                        Logger.ERROR("Failed to copy key: {}", .{err});
+                        Logger.ERROR("Failed to copy key: {s}", .{@errorName(err)});
                         return;
                     };
-                    self.connections.put(key_copy, Connection.init(from_addr)) catch |err| {
-                        Logger.ERROR("Failed to put connection: {}", .{err});
+                    self.connections.put(key_copy, Connection.init(from_addr, key_copy)) catch |err| {
+                        Logger.ERROR("Failed to put connection: {s}", .{@errorName(err)});
                         std.heap.page_allocator.free(key_copy);
+                        return;
                     };
 
-                    // Set server reference in the connection
                     if (self.connections.getPtr(key_copy)) |conn| {
                         conn.setServer(self);
                     }
@@ -213,9 +243,6 @@ pub const Server = struct {
             0x80 => {
                 if (self.connections.getPtr(key)) |conn| {
                     conn.handleFrameSet(data);
-                    Logger.INFO("Connection found", .{});
-                } else {
-                    Logger.INFO("Connection not found", .{});
                 }
             },
             Packets.Ack => {
@@ -228,14 +255,19 @@ pub const Server = struct {
                     conn.handleNack(data);
                 }
             },
+            Packets.DisconnectNotification => {
+                if (self.connections.getPtr(key)) |conn| {
+                    // Call onDisconnect which will handle the cleanup
+                    conn.onDisconnect();
+                }
+            },
             0x0e => {
                 // Skip, test packet
             },
             else => {
-                Logger.WARN("Unknown packet ID: {}", .{ID});
+                Logger.WARN("Unknown packet ID: {d}", .{ID});
             },
         }
-        defer std.heap.page_allocator.free(key);
     }
 
     pub fn send(self: *Self, data: []const u8, to_addr: std.net.Address) void {
@@ -245,8 +277,34 @@ pub const Server = struct {
         }
 
         self.socket.?.send(data, to_addr) catch |err| {
-            Logger.ERROR("Failed to send: {}", .{err});
+            Logger.ERROR("Failed to send: {s}", .{@errorName(err)});
             return;
         };
+    }
+
+    pub fn disconnectClient(self: *Self, address: std.net.Address, key: []const u8) void {
+        // Log BEFORE we do anything else to avoid use-after-free
+        var addr_buf: [48]u8 = undefined;
+        const addr_str = std.fmt.bufPrint(&addr_buf, "{any}", .{address}) catch "unknown address";
+        Logger.INFO("Disconnecting client: {s}", .{addr_str});
+
+        if (self.connections.getPtr(key)) |conn| {
+            // Deactivate first to prevent further operations
+            conn.deactivate();
+
+            // Call disconnection callback BEFORE removing connection
+            if (self.disconnection_callback) |callback| {
+                callback(address, self.disconnection_context);
+            }
+
+            // Make copy and remove from hashmap
+            var conn_copy = conn.*;
+            _ = self.connections.remove(key);
+
+            // Clean up the connection
+            conn_copy.deinit();
+
+            Logger.INFO("Connection removed and deinitialized: {s}", .{addr_str});
+        }
     }
 };
