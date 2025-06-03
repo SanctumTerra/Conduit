@@ -16,7 +16,7 @@ pub const ConnectionRequest = struct {
         const buffer = &[_]u8{};
         var stream = BinaryStream.init(buffer, 0);
         defer stream.deinit();
-        stream.writeVarInt(Packets.ConnectionRequest, .Big);
+        stream.writeUint8(Packets.ConnectionRequest);
         stream.writeInt64(self.guid, .Big);
         stream.writeInt64(self.timestamp, .Big);
         stream.writeBool(self.use_security);
@@ -30,7 +30,7 @@ pub const ConnectionRequest = struct {
     pub fn deserialize(data: []const u8) ConnectionRequest {
         var stream = BinaryStream.init(data, 0);
         defer stream.deinit();
-        _ = stream.readVarInt(.Big);
+        _ = stream.readUint8();
         const guid = stream.readInt64(.Big);
         const timestamp = stream.readInt64(.Big);
         const use_security = stream.readBool();
