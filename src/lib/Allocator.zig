@@ -1,7 +1,12 @@
 const std = @import("std");
 const heap = std.heap;
 
-var allocator = heap.GeneralPurposeAllocator(.{ .safety = true, .enable_memory_limit = true }){};
+var allocator = heap.GeneralPurposeAllocator(.{
+    .safety = true,
+    .enable_memory_limit = true,
+    .retain_metadata = true,
+    // .verbose_log = true,
+}){};
 
 pub fn get() std.mem.Allocator {
     return allocator.allocator();
@@ -16,6 +21,7 @@ pub fn getMemoryUsage() void {
     // if (leaks) {
     // std.process.exit(1);
     // }
+    // allocator.flushRetainedMetadata();
 }
 
 pub fn deinit() std.heap.Check {
