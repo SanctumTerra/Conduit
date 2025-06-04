@@ -825,3 +825,7 @@ pub fn init(buffer: []const u8, position: ?usize) BinaryStream {
     const pos = position orelse 0; // Default position to 0 if null
     return BinaryStream.init(Callocator.get(), buffer, pos);
 }
+
+pub fn initEmpty() BinaryStream {
+    return BinaryStream.init(Callocator.get(), &[_]u8{}, 0);
+}
