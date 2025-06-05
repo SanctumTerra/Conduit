@@ -12,7 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: goto-bus-stop/setup-zig@v2
-      - run: zig build -Drelease-safe=true
+      - run: zig build;
       - name: Prepare Artifact
         shell: bash
         run: |
