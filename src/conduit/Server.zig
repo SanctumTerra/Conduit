@@ -3,6 +3,7 @@ const RaknetServer = @import("../raknet/Server.zig").Server;
 const Connection = @import("../raknet/Connection.zig").Connection;
 const std = @import("std");
 const Player = @import("./player/Player.zig").Player;
+const NetworkHandler = @import("./player/NetworkHandler.zig").NetworkHandler;
 
 pub const ServerConfig = struct {
     address: []const u8 = "0.0.0.0",
@@ -20,8 +21,6 @@ pub const Server = struct {
     tick_thread: ?std.Thread,
 
     pub fn init(allocator: std.mem.Allocator, config: ServerConfig) !Server {
-        Logger.INFO("Server initialized", .{});
-
         return Server{
             .allocator = allocator,
             .players = std.StringHashMap(Player).init(allocator),
@@ -39,7 +38,6 @@ pub const Server = struct {
     pub fn deinit(self: *Server) void {
         self.stop();
 
-        // Deinit all players
         var iterator = self.players.iterator();
         while (iterator.next()) |entry| {
             entry.value_ptr.deinit();
@@ -57,10 +55,7 @@ pub const Server = struct {
         self.raknet.setConnectionCallback(connection_callback, self);
         self.raknet.setDisconnectionCallback(disconnection_callback, self);
 
-        // Start the tick thread
         self.tick_thread = try std.Thread.spawn(.{}, tickLoop, .{self});
-
-        // Start listening for connections
         self.raknet.listen();
     }
 
@@ -84,7 +79,6 @@ pub const Server = struct {
 
             self.tick();
 
-            // Sleep for remaining time to maintain tick rate
             const elapsed = std.time.nanoTimestamp() - start_time;
             if (elapsed < tick_interval_ns) {
                 const sleep_duration = tick_interval_ns - @as(u64, @intCast(elapsed));
@@ -104,45 +98,72 @@ pub const Server = struct {
 
     fn disconnection_callback(address: std.net.Address, context: ?*anyopaque) void {
         const server = @as(*Server, @ptrCast(@alignCast(context)));
-        // Since we don't have the connection object directly, we need to find it by address
         server.handleDisconnectionByAddress(address);
     }
 
     fn handleConnection(self: *Server, connection: *Connection) !void {
         const key = connection.key;
-        const player = try Player.init(self.allocator, connection, self);
-        try self.players.put(key, player);
+        const new_player = try Player.init(self.allocator, connection, self);
+        try self.players.put(key, new_player);
+        const player_ptr = self.players.getPtr(key).?;
+        player_ptr.network_handler = NetworkHandler.init(player_ptr);
+        player_ptr.connection.setGamePacketCallback(Player.game_packet_callback, player_ptr);
         Logger.INFO("Player {s} connected", .{key});
     }
 
     fn handleDisconnection(self: *Server, connection: *Connection) void {
         const key = connection.key;
-        if (self.players.fetchRemove(key)) |entry| {
-            entry.value.deinit();
+        if (self.players.fetchRemove(key)) |const_entry| {
+            var player_to_deinit = const_entry.value;
+            player_to_deinit.deinit();
             Logger.INFO("Player {s} disconnected", .{key});
         }
     }
 
     fn handleDisconnectionByAddress(self: *Server, address: std.net.Address) void {
-        // Format address to key
         var buf: [48]u8 = undefined;
         const key = std.fmt.bufPrint(&buf, "{any}", .{address}) catch |err| {
             Logger.ERROR("Failed to format address: {s}", .{@errorName(err)});
             return;
         };
-
-        // Use the key to find and remove the player
-        if (self.players.fetchRemove(key)) |entry| {
-            entry.value.deinit();
+        if (self.players.fetchRemove(key)) |const_entry| {
+            var player_to_deinit = const_entry.value;
+            player_to_deinit.deinit();
             Logger.INFO("Player {s} disconnected", .{key});
         }
     }
 
     fn tick(self: *Server) void {
-        // Tick all players
+        var iterator = self.players.iterator();
+        var players_to_disconnect = std.ArrayList([]const u8).init(self.allocator);
+        defer players_to_disconnect.deinit();
+
+        while (iterator.next()) |entry| {
+            const player = entry.value_ptr;
+            player.tick();
+            if (player.shouldRemove()) {
+                players_to_disconnect.append(entry.key_ptr.*) catch |err| {
+                    Logger.ERROR("Failed to add player key {s} to disconnect list: {}", .{ entry.key_ptr.*, err });
+                };
+            }
+        }
+
+        for (players_to_disconnect.items) |player_key_to_disconnect| {
+            if (self.players.getPtr(player_key_to_disconnect)) |player_to_disconnect| {
+                Logger.INFO("Player {s} marked for removal, initiating RakNet disconnect.", .{player_key_to_disconnect});
+                self.raknet.disconnectClient(player_to_disconnect.connection.address, player_to_disconnect.connection.key);
+            } else {
+                Logger.WARN("Player {s} was marked for removal but not found in map for RakNet disconnect.", .{player_key_to_disconnect});
+            }
+        }
+    }
+
+    pub fn broadcastPacket(self: *Server, packet: []const u8) void {
         var iterator = self.players.iterator();
         while (iterator.next()) |entry| {
-            entry.value_ptr.tick();
+            entry.value_ptr.sendPacket(packet) catch |err| {
+                Logger.ERROR("Failed to send packet to player {s}: {}", .{ entry.key_ptr.*, err });
+            };
         }
     }
 };
