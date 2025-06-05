@@ -180,7 +180,7 @@ pub const Server = struct {
         var ID: u8 = data[0];
         if (ID & 0xF0 == 0x80) ID = 0x80;
         const key = self.getAddressAsKey(from_addr);
-        defer std.heap.page_allocator.free(key); // Always free the temporary lookup key
+        defer std.heap.page_allocator.free(key);
 
         switch (ID) {
             Packets.UnconnectedPing => {
@@ -257,7 +257,6 @@ pub const Server = struct {
             },
             Packets.DisconnectNotification => {
                 if (self.connections.getPtr(key)) |conn| {
-                    // Call onDisconnect which will handle the cleanup
                     conn.onDisconnect();
                 }
             },
@@ -283,28 +282,23 @@ pub const Server = struct {
     }
 
     pub fn disconnectClient(self: *Self, address: std.net.Address, key: []const u8) void {
-        // Log BEFORE we do anything else to avoid use-after-free
         var addr_buf: [48]u8 = undefined;
         const addr_str = std.fmt.bufPrint(&addr_buf, "{any}", .{address}) catch "unknown address";
-        Logger.INFO("Disconnecting client: {s}", .{addr_str});
+        Logger.DEBUG("Disconnecting client: {s}", .{addr_str});
 
         if (self.connections.getPtr(key)) |conn| {
-            // Deactivate first to prevent further operations
             conn.deactivate();
 
-            // Call disconnection callback BEFORE removing connection
             if (self.disconnection_callback) |callback| {
                 callback(address, self.disconnection_context);
             }
 
-            // Make copy and remove from hashmap
             var conn_copy = conn.*;
             _ = self.connections.remove(key);
 
-            // Clean up the connection
             conn_copy.deinit();
 
-            Logger.INFO("Connection removed and deinitialized: {s}", .{addr_str});
+            Logger.DEBUG("Connection removed and deinitialized: {s}", .{addr_str});
         }
     }
 };
