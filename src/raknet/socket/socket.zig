@@ -129,7 +129,7 @@ pub const Socket = struct {
                 _ = posix.close(sock);
                 return err;
             };
-            _ = posix.fcntl(sock, posix.F.SETFL, flags | posix.O.NONBLOCK) catch |err| {
+            _ = posix.fcntl(sock, posix.F.SETFL, flags | std.os.O.NONBLOCK) catch |err| {
                 _ = posix.close(sock);
                 return err;
             };
@@ -367,7 +367,7 @@ pub const Socket = struct {
             ) catch |err| {
                 return switch (err) {
                     error.WouldBlock => .would_block,
-                    error.ConnectionRefused, error.NetworkSubsystemFailed, error.NetworkUnreachable => .{ .error_recoverable = err },
+                    error.ConnectionRefused, error.NetworkSubsystemFailed => .{ .error_recoverable = err },
                     error.FileDescriptorNotASocket,
                     error.SocketNotConnected,
                     => .{ .error_fatal = err },
