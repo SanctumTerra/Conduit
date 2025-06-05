@@ -17,7 +17,12 @@ pub const SocketError = error{
     ThreadSpawnFailed,
     AddressParseError,
     SocketClosed,
-} || std.mem.Allocator.Error || std.net.Address.ListenError || std.posix.SocketError || std.posix.BindError || std.posix.SendToError;
+} || std.mem.Allocator.Error || std.net.Address.ListenError || std.posix.SocketError || std.posix.BindError || std.posix.SendToError || error{
+    FileBusy,
+    Locked,
+    DeadLock,
+    LockedRegionLimitExceeded,
+};
 
 pub const CallbackFn = *const fn (
     data: []u8,
@@ -362,10 +367,7 @@ pub const Socket = struct {
             ) catch |err| {
                 return switch (err) {
                     error.WouldBlock => .would_block,
-                    error.ConnectionRefused,
-                    error.NetworkUnreachable,
-                    error.NetworkSubsystemFailed,
-                    => .{ .error_recoverable = err },
+                    error.ConnectionRefused, error.NetworkSubsystemFailed, error.NetworkUnreachable => .{ .error_recoverable = err },
                     error.FileDescriptorNotASocket,
                     error.SocketNotConnected,
                     => .{ .error_fatal = err },
@@ -409,14 +411,14 @@ pub const Socket = struct {
                 return SocketError.SendFailed;
             }
         } else {
-            posix.sendto(
+            _ = posix.sendto(
                 self.socket_handle,
                 data,
                 0,
                 &to_addr.any,
                 to_addr.getOsSockLen(),
             ) catch |err| {
-                std.log.err("sendto failed: {}", .{err});
+                std.log.err("sendto failed: {any}", .{err});
                 return err;
             };
         }
