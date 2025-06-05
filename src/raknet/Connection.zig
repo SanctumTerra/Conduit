@@ -53,7 +53,6 @@ pub const Fragment = struct {
     }
 
     pub fn deactivate(self: *Fragment) void {
-        Logger.INFO("Deactivating fragment group with split_id {d}, contained {d} fragments", .{ self.split_id, self.fragments.count() });
         self.clearFrames();
         self.is_active = false;
     }
@@ -176,11 +175,10 @@ pub const Connection = struct {
     game_packet_callback: ?GamePacketCallbackFn = null,
     game_packet_context: ?*anyopaque = null,
 
-    // Thread safety mutexes
-    critical_section: std.Thread.Mutex, // For fragments and ordering queues
-    sequence_mutex: std.Thread.Mutex, // For sequence tracking
-    backup_mutex: std.Thread.Mutex, // For backup frames
-    output_mutex: std.Thread.Mutex, // For output queue
+    critical_section: std.Thread.Mutex,
+    sequence_mutex: std.Thread.Mutex,
+    backup_mutex: std.Thread.Mutex,
+    output_mutex: std.Thread.Mutex,
 
     received_sequences: std.AutoHashMap(u24, void),
     lost_sequences: std.AutoHashMap(u24, void),
@@ -191,7 +189,6 @@ pub const Connection = struct {
     last_cleanup_time: i64,
     last_ping_time: i64,
 
-    // Debug tracking
     frames_created: u64,
     frames_destroyed: u64,
     last_leak_check: i64,
@@ -210,7 +207,6 @@ pub const Connection = struct {
         connection.is_active = std.atomic.Value(bool).init(true);
         connection.connected = false;
 
-        // Initialize all mutexes
         connection.critical_section = std.Thread.Mutex{};
         connection.sequence_mutex = std.Thread.Mutex{};
         connection.backup_mutex = std.Thread.Mutex{};
@@ -240,7 +236,7 @@ pub const Connection = struct {
     }
 
     pub fn deinit(self: *Connection) void {
-        Logger.INFO("Deinitializing connection - created {d} frames, destroyed {d} frames", .{ self.frames_created, self.frames_destroyed });
+        Logger.DEBUG("Deinitializing connection - created {d} frames, destroyed {d} frames", .{ self.frames_created, self.frames_destroyed });
 
         self.communication_data.deinit();
 
@@ -266,7 +262,6 @@ pub const Connection = struct {
         self.output_backup.deinit();
         self.backup_mutex.unlock();
 
-        // Free the connection key
         std.heap.page_allocator.free(self.key);
     }
 
@@ -284,21 +279,18 @@ pub const Connection = struct {
         const now = std.time.milliTimestamp();
         const ping_timeout = 30000;
 
-        // Check for ping timeout
         if (now - self.last_ping_time > ping_timeout) {
-            Logger.WARN("Connection ping timeout - no ConnectedPing received for {d}ms, disconnecting", .{now - self.last_ping_time});
+            Logger.DEBUG("Connection ping timeout - no ConnectedPing received for {d}ms, disconnecting", .{now - self.last_ping_time});
             self.onDisconnect();
             return;
         }
 
-        // Regular cleanup
         if (now - self.last_cleanup_time >= CLEANUP_INTERVAL_MS) {
             self.performCleanup();
             self.last_cleanup_time = now;
         }
 
-        // Leak detection
-        if (now - self.last_leak_check >= 10000) { // Every 10 seconds
+        if (now - self.last_leak_check >= 10000) {
             const frame_diff = self.frames_created - self.frames_destroyed;
             if (frame_diff > 1000) {
                 Logger.WARN("Potential frame leak detected: created {d}, destroyed {d}, diff {d}", .{ self.frames_created, self.frames_destroyed, frame_diff });
@@ -309,7 +301,6 @@ pub const Connection = struct {
 
         self.sendAcksAndNacks();
 
-        // Protect output queue access
         self.output_mutex.lock();
         const queue_len = self.output_frame_queue.items.len;
         self.output_mutex.unlock();
@@ -323,7 +314,6 @@ pub const Connection = struct {
         const current_time = std.time.milliTimestamp();
         var cleaned_items: usize = 0;
 
-        // Clean fragments
         self.critical_section.lock();
         for (&self.communication_data.active_fragmentations) |*fragment_slot| {
             if (fragment_slot.is_active) {
@@ -335,8 +325,6 @@ pub const Connection = struct {
                 }
             }
         }
-
-        // Clean ordering queues
         for (&self.communication_data.input_ordering_queue, 0..) |*queue_slot, queue_idx| {
             if (!self.communication_data.ordering_queue_initialized[queue_idx]) continue;
 
@@ -374,7 +362,6 @@ pub const Connection = struct {
         }
         self.critical_section.unlock();
 
-        // Clean backup frames - with proper locking
         self.backup_mutex.lock();
         if (self.output_backup.count() > MAX_BACKUP_SEQUENCES) {
             var sequences_to_remove = std.ArrayList(u24).init(CAllocator.get());
@@ -396,8 +383,6 @@ pub const Connection = struct {
             cleaned_items += sequences_to_remove.items.len;
         }
         self.backup_mutex.unlock();
-
-        // Clean sequence tracking - with proper locking
         self.sequence_mutex.lock();
         if (self.received_sequences.count() > MAX_SEQUENCE_TRACKING) {
             const old_count = self.received_sequences.count();
@@ -420,7 +405,6 @@ pub const Connection = struct {
     fn emergencyCleanup(self: *Connection) void {
         Logger.WARN("Emergency cleanup triggered!", .{});
 
-        // Clear all backup frames
         self.backup_mutex.lock();
         var backup_iter = self.output_backup.iterator();
         while (backup_iter.next()) |entry| {
@@ -434,13 +418,10 @@ pub const Connection = struct {
         self.output_backup.clearRetainingCapacity();
         self.backup_mutex.unlock();
 
-        // Clear all sequence tracking
         self.sequence_mutex.lock();
         self.received_sequences.clearRetainingCapacity();
         self.lost_sequences.clearRetainingCapacity();
         self.sequence_mutex.unlock();
-
-        // Clear all fragments and ordering queues
         self.critical_section.lock();
         for (&self.communication_data.active_fragmentations) |*frag_slot| {
             if (frag_slot.is_active) {
@@ -585,8 +566,6 @@ pub const Connection = struct {
 
         const frame = self.frameIn(serialized);
         self.sendFrame(frame, Priority.Immediate);
-
-        Logger.INFO("Connection request accepted: address={}, timestamp={d}, request_timestamp={d}", .{ connection_request_accepted.address, connection_request_accepted.timestamp, connection_request_accepted.request_timestamp });
     }
 
     fn handleConnectedPing(self: *Connection, data: []const u8) void {
@@ -599,8 +578,6 @@ pub const Connection = struct {
 
         const frame = self.frameIn(serialized);
         self.sendFrame(frame, Priority.Immediate);
-
-        Logger.INFO("ConnectedPing received and pong sent (ping timeout reset)", .{});
     }
 
     pub fn frameIn(self: *Connection, msg: []const u8) Frame {
@@ -622,14 +599,10 @@ pub const Connection = struct {
         const frame_set = FrameSet.deserialize(data);
         const sequence = frame_set.sequence_number;
 
-        Logger.INFO("Processing FrameSet sequence {d} with {d} frames", .{ sequence, frame_set.frames.len });
-
         self.sequence_mutex.lock();
-        // Special case for initial packets - if last_input_sequence is -1, sequence 0 is not a duplicate
         const is_duplicate = (self.last_input_sequence != -1 and sequence <= @as(u24, @intCast(@max(0, self.last_input_sequence)))) or self.received_sequences.contains(sequence);
         if (is_duplicate) {
             self.sequence_mutex.unlock();
-            // Clean up frames before returning
             for (frame_set.frames) |*frame| {
                 frame.deinit();
             }
@@ -651,10 +624,8 @@ pub const Connection = struct {
         self.last_input_sequence = @as(i32, @intCast(sequence));
         self.sequence_mutex.unlock();
 
-        // Process frames and properly manage their lifecycle
         for (frame_set.frames, 0..) |frame_from_set, frame_idx| {
             if (frame_from_set.payload.len > 0) {
-                // Create a proper copy with independent memory
                 const payload_copy = CAllocator.get().dupe(u8, frame_from_set.payload) catch |err| {
                     Logger.ERROR("Failed to clone frame payload for frame #{d}: {}", .{ frame_idx, err });
                     continue;
@@ -667,7 +638,6 @@ pub const Connection = struct {
             }
         }
 
-        // Now safely clean up the original frames
         for (frame_set.frames) |*frame| {
             frame.deinit();
         }
@@ -725,7 +695,6 @@ pub const Connection = struct {
             const split_index = frame.split_frame_index.?;
             const split_count = frame.split_size.?;
 
-            // Validate split parameters
             if (split_count > 256 or split_index >= split_count) {
                 Logger.ERROR("Invalid split parameters: split_count={d}, split_index={d}", .{ split_count, split_index });
                 frame.deinit();
@@ -743,15 +712,12 @@ pub const Connection = struct {
 
             var group = group_ptr.?;
             group.timestamp = std.time.milliTimestamp();
-
-            // Check if group already has too many fragments
             if (group.fragments.count() > 256) {
                 Logger.WARN("Fragment group {d} has too many fragments, clearing", .{split_id});
                 group.deactivate();
                 group.activate(split_id);
             }
 
-            // Store the frame - if this succeeds, the group owns the frame
             group.fragments.put(split_index, frame) catch |err| {
                 Logger.ERROR("Failed to store fragment: {}", .{err});
                 frame.deinit();
@@ -759,11 +725,9 @@ pub const Connection = struct {
                 return;
             };
 
-            // Frame is now owned by the group, don't free it
             should_free_original = false;
 
             if (group.fragments.count() == @as(usize, split_count)) {
-                // Verify we have all consecutive fragments
                 var has_all_fragments = true;
                 for (0..split_count) |i| {
                     if (!group.fragments.contains(@intCast(i))) {
@@ -777,15 +741,13 @@ pub const Connection = struct {
                     return;
                 }
 
-                // Calculate total size
                 var total_size: usize = 0;
                 for (0..split_count) |i| {
                     const s_frame = group.fragments.get(@intCast(i)).?;
                     total_size += s_frame.payload.len;
                 }
 
-                // Sanity check total size
-                if (total_size > 1024 * 1024) { // 1MB limit
+                if (total_size > 1024 * 1024) {
                     Logger.ERROR("Reassembled frame too large: {d} bytes", .{total_size});
                     group.deactivate();
                     return;
@@ -817,13 +779,11 @@ pub const Connection = struct {
                     .allocator = CAllocator.get(),
                 };
 
-                group.deactivate(); // This will clean up all the stored frames
+                group.deactivate();
                 frame_to_handle = reassembled_frame;
                 self.trackFrameCreation();
             }
         }
-
-        // If we couldn't store the frame and need to free it
         if (should_free_original) {
             frame.deinit();
             self.trackFrameDestruction();
@@ -971,7 +931,6 @@ pub const Connection = struct {
                 self.trackFrameDestruction();
                 expected_index += 1;
 
-                // Process consecutive frames from queue
                 while (queue.count() > 0) {
                     const entry_opt = queue.get(expected_index);
                     if (entry_opt == null) break;
@@ -1000,7 +959,6 @@ pub const Connection = struct {
                 self.communication_data.input_order_index[channel] = expected_index;
                 self.communication_data.input_highest_sequence_index[channel] = 0;
             } else if (frame_index > expected_index) {
-                // Check queue limits
                 if (queue.count() >= MAX_ORDERING_QUEUE_SIZE) {
                     Logger.WARN("Ordering queue {d} full, discarding frame", .{channel});
                     frame.deinit();
@@ -1008,7 +966,6 @@ pub const Connection = struct {
                     return;
                 }
 
-                // Check if frame is too far ahead
                 if (frame_index - expected_index > 100) {
                     Logger.WARN("Frame too far ahead (expected {d}, got {d}), discarding", .{ expected_index, frame_index });
                     frame.deinit();
@@ -1023,10 +980,8 @@ pub const Connection = struct {
                     self.trackFrameDestruction();
                     return;
                 };
-                // Don't track destruction here - frame is now owned by the queue
                 return;
             } else {
-                // Frame is older than expected, discard
                 frame.deinit();
                 self.trackFrameDestruction();
                 return;
@@ -1054,10 +1009,6 @@ pub const Connection = struct {
             }
         }
         self.backup_mutex.unlock();
-
-        if (cleared_count > 0) {
-            Logger.INFO("ACK processed: cleared {d} backup sequences", .{cleared_count});
-        }
     }
 
     pub fn handleNack(self: *Connection, data: []const u8) void {
@@ -1070,7 +1021,6 @@ pub const Connection = struct {
         }
     }
 
-    // Unsafe version - caller must hold backup_mutex
     fn clearBackupFramesUnsafe(self: *Connection, sequence: u24) void {
         if (self.output_backup.get(sequence)) |frames| {
             for (frames) |*frame| {
@@ -1191,7 +1141,6 @@ pub const Connection = struct {
         const actual_amount = @min(amount, self.output_frame_queue.items.len);
         const frames_to_send = self.output_frame_queue.items[0..actual_amount];
 
-        // Create copies for backup
         var frames_for_backup = CAllocator.get().alloc(Frame, frames_to_send.len) catch {
             Logger.ERROR("Failed to allocate frames for backup", .{});
             self.output_mutex.unlock();
@@ -1202,7 +1151,6 @@ pub const Connection = struct {
             const payload_copy = if (frame.payload.len > 0)
                 CAllocator.get().dupe(u8, frame.payload) catch {
                     Logger.ERROR("Failed to duplicate frame payload for backup", .{});
-                    // Clean up previously allocated frames
                     for (0..i) |j| {
                         frames_for_backup[j].deinit();
                         self.trackFrameDestruction();
@@ -1226,7 +1174,6 @@ pub const Connection = struct {
         const serialized = frameset.serialize();
         defer CAllocator.get().free(serialized);
 
-        // Store backup
         self.backup_mutex.lock();
         if (self.output_backup.contains(sequence)) {
             self.clearBackupFramesUnsafe(sequence);
@@ -1243,10 +1190,7 @@ pub const Connection = struct {
         };
         self.backup_mutex.unlock();
 
-        // Update output queue
         self.updateOutputQueue(actual_amount);
-
-        // Send the frame set
         self.send(serialized);
     }
 
@@ -1255,7 +1199,6 @@ pub const Connection = struct {
         defer self.output_mutex.unlock();
 
         if (amount >= self.output_frame_queue.items.len) {
-            // Clear entire queue
             for (self.output_frame_queue.items) |*frame| {
                 frame.deinit();
                 self.trackFrameDestruction();
@@ -1263,15 +1206,12 @@ pub const Connection = struct {
             self.output_frame_queue.clearRetainingCapacity();
             self.output_frames_byte_length = 0;
         } else {
-            // Remove first 'amount' items and calculate their total size
             var removed_size: usize = 0;
             for (self.output_frame_queue.items[0..amount]) |*frame| {
                 removed_size += frame.getByteLength();
                 frame.deinit();
                 self.trackFrameDestruction();
             }
-
-            // Shift remaining items
             const remaining_count = self.output_frame_queue.items.len - amount;
             for (0..remaining_count) |i| {
                 self.output_frame_queue.items[i] = self.output_frame_queue.items[i + amount];
@@ -1338,12 +1278,11 @@ pub const Connection = struct {
     }
 
     pub fn onDisconnect(self: *Connection) void {
-        // Check if already disconnecting to prevent recursion
         if (!self.is_active.load(.acquire)) {
             return;
         }
 
-        Logger.INFO("Disconnecting connection", .{});
+        Logger.DEBUG("Disconnecting connection", .{});
         self.deactivate();
 
         if (self.server) |server_ptr| {
@@ -1353,8 +1292,19 @@ pub const Connection = struct {
     }
 
     pub fn deactivate(self: *Connection) void {
-        Logger.INFO("Deactivating connection", .{});
-        self.is_active.store(false, .release);
+        var addr_buf: [48]u8 = undefined;
+        const addr_str = std.fmt.bufPrint(&addr_buf, "{any}", .{self.address}) catch "unknown_addr";
+
+        if (self.is_active.load(.acquire)) {
+            Logger.DEBUG("Deactivating connection for {s}", .{addr_str});
+            self.is_active.store(false, .release);
+            self.game_packet_callback = null;
+            self.game_packet_context = null;
+            self.connected = false;
+            Logger.DEBUG("Connection for {s} fully deactivated, callbacks nulled.", .{addr_str});
+        } else {
+            Logger.DEBUG("Connection for {s} already inactive.", .{addr_str});
+        }
     }
 
     pub fn verifyCleanup(self: *Connection) void {
