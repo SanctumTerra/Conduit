@@ -119,18 +119,12 @@ pub const Socket = struct {
 
             self.socket_handle = sock;
         } else {
-            const sock = posix.socket(posix.AF.INET, posix.SOCK.DGRAM, 0) catch |err| {
+            const sock = posix.socket(
+                posix.AF.INET,
+                posix.SOCK.DGRAM | std.os.linux.SOCK.NONBLOCK,
+                0,
+            ) catch |err| {
                 std.log.err("Failed to create socket: {}", .{err});
-                return err;
-            };
-
-            // Set socket to non-blocking mode
-            const flags = posix.fcntl(sock, posix.F.GETFL, 0) catch |err| {
-                _ = posix.close(sock);
-                return err;
-            };
-            _ = posix.fcntl(sock, posix.F.SETFL, flags | std.os.O.NONBLOCK) catch |err| {
-                _ = posix.close(sock);
                 return err;
             };
 
@@ -368,9 +362,7 @@ pub const Socket = struct {
                 return switch (err) {
                     error.WouldBlock => .would_block,
                     error.ConnectionRefused, error.NetworkSubsystemFailed => .{ .error_recoverable = err },
-                    error.FileDescriptorNotASocket,
-                    error.SocketNotConnected,
-                    => .{ .error_fatal = err },
+                    error.SocketNotConnected => .{ .error_fatal = err },
                     else => .{ .error_recoverable = err },
                 };
             };
