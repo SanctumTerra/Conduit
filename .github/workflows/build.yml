@@ -1,7 +1,7 @@
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - main
 
 jobs:
   build:
@@ -55,3 +55,6 @@ jobs:
           body: |
             **Build Date:** ${{ steps.date.outputs.date }}
             **Commit:** `${{ steps.vars.outputs.sha_short }}`
+          tag_name: latest
+          prerelease: true
+          make_latest: true
