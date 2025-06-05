@@ -20,6 +20,6 @@ pub fn main() !void {
 
     while (true) {
         Callocator.getMemoryUsage();
-        std.time.sleep(std.time.ns_per_s * 1);
+        std.time.sleep(std.time.ns_per_s * 10);
     }
 }
