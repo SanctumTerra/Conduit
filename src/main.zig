@@ -1,25 +1,42 @@
 const std = @import("std");
-const Callocator = @import("CAllocator");
-const Logger = @import("Logger").Logger;
-const BinaryStream = @import("BinaryStream");
-const Socket = @import("./raknet/socket/socket.zig").Socket;
 const Server = @import("./conduit/Server.zig").Server;
+const Logger = @import("ZigNet").Logger;
 
 pub fn main() !void {
-    defer _ = Callocator.deinit();
-
-    var server = try Server.init(Callocator.get(), .{
-        .address = "0.0.0.0",
-        .port = 19132,
-        .max_players = 60,
-        .tick_rate = 20,
+    var server = try Server.init(.{
+        // .allocator = CAllocator.get(),
     });
-    defer server.deinit();
+    defer {
+        server.deinit();
+        const leaked = CAllocator.getMemoryLeaks(); // Check leaks after cleanup
+        Logger.ERROR("Leaked memory? {any}", .{leaked});
+        CAllocator.deinit();
+    }
+    try server.listen();
 
-    try server.start();
+    std.debug.print("Server started! Press 'Q' and Enter to quit...\n", .{});
+
+    // Read input until user presses 'Q'
+    const stdin = std.io.getStdIn().reader();
+    var buffer: [256]u8 = undefined;
 
     while (true) {
-        Callocator.getMemoryUsage();
-        std.time.sleep(std.time.ns_per_s * 10);
+        if (stdin.readUntilDelimiterOrEof(buffer[0..], '\n')) |input| {
+            if (input) |line| {
+                // Trim whitespace and convert to lowercase
+                const trimmed = std.mem.trim(u8, line, " \t\r\n");
+                if (std.mem.eql(u8, trimmed, "q") or std.mem.eql(u8, trimmed, "Q")) {
+                    std.debug.print("Shutting down gracefully...\n", .{});
+                    break;
+                }
+                // You can add other commands here if needed
+                std.debug.print("Press 'Q' and Enter to quit...\n", .{});
+            }
+        } else |err| {
+            Logger.ERROR("Error reading input: {any}", .{err});
+            break;
+        }
     }
 }
+
+const CAllocator = @import("CAllocator");

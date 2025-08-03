@@ -10,11 +10,14 @@ pub const Framer = struct {
         defer stream.deinit();
 
         for (buffers) |buffer| {
-            stream.writeVarInt(@intCast(buffer.len), .Big);
+            stream.writeVarInt(@intCast(buffer.len));
             stream.write(buffer);
         }
 
-        return stream.toOwnedSlice() catch @panic("Failed to allocate memory for pong packet");
+        return stream.getBufferOwned(CAllocator.get()) catch {
+            Logger.ERROR("Failed to allocate memory for frame packet", .{});
+            return &[_]u8{};
+        };
     }
 
     pub fn unframe(data: []const u8) ![][]const u8 {
@@ -23,45 +26,45 @@ pub const Framer = struct {
         defer stream.deinit();
 
         var list = std.ArrayList([]const u8).init(allocator);
-        errdefer list.deinit();
-
-        if (data.len > 0 and data[0] == 6 and data.len == 7) {
-            const buffer_view = data[1..];
-            const buffer_owned_copy = allocator.dupe(u8, buffer_view) catch |err| {
-                std.debug.print("Framer.unframe: Failed to duplicate buffer_view in special case ({d} bytes): {any}\n", .{ buffer_view.len, err });
-                return err;
-            };
-            try list.append(buffer_owned_copy);
-            return list.toOwnedSlice();
+        errdefer {
+            // Clean up on error
+            for (list.items) |frame_slice| {
+                allocator.free(frame_slice);
+            }
+            list.deinit();
         }
 
-        while (stream.position < data.len) {
-            if (stream.position + 1 > data.len) {
-                std.debug.print("Breaking early: not enough bytes for length\n", .{});
+        // // Special case handling
+        // if (data.len == 7 and data[0] == 6) {
+        //     const buffer_view = data[1..];
+        //     const buffer_owned_copy = try allocator.dupe(u8, buffer_view);
+        //     try list.append(buffer_owned_copy);
+        //     return try list.toOwnedSlice();
+        // }
+
+        while (stream.offset < data.len) {
+            if (stream.offset + 1 > data.len) break;
+
+            const length = stream.readVarInt();
+
+            // This is pretty much 2.5x the size of Login packet and no other packet is as big.
+            if (length > 131072 * 5) {
+                Logger.WARN("Unreasonable frame length: {d}, likely parsing error", .{length});
                 break;
             }
 
-            const length = stream.readVarInt(.Big);
-
-            if (length > 131072) {
-                std.debug.print("Unreasonable frame length: {d}, likely parsing error\n", .{length});
-                break;
-            }
-
-            if (stream.position + length > data.len) {
-                std.debug.print("Not enough bytes for frame: need {d}, have {d}\n", .{ length, data.len - stream.position });
+            if (stream.offset + length > data.len) {
+                Logger.WARN("Not enough bytes for frame: need {d}, have {d}", .{ length, data.len - stream.offset });
                 break;
             }
 
             const frame_view = stream.read(length);
-            const frame_owned_copy = allocator.dupe(u8, frame_view) catch |err| {
-                std.debug.print("Failed to duplicate frame_view: {any}\n", .{err});
-                return err;
-            };
+            const frame_owned_copy = try allocator.dupe(u8, frame_view);
+            // defer allocator.free(frame_owned_copy); // can not do it here cause then it invalidates the data.
             try list.append(frame_owned_copy);
         }
 
-        return list.toOwnedSlice();
+        return try list.toOwnedSlice();
     }
 
     /// Free memory allocated by unframe

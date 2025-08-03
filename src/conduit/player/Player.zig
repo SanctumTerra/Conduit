@@ -1,110 +1,110 @@
-const std = @import("std");
-const Logger = @import("Logger").Logger;
-const Connection = @import("../../raknet/Connection.zig").Connection;
-const Server = @import("../Server.zig").Server;
-const NetworkHandler = @import("NetworkHandler.zig").NetworkHandler;
-const Framer = @import("../../protocol/misc/Framer.zig").Framer;
-const BinaryStream = @import("BinaryStream").BinaryStream;
-const CAllocator = @import("CAllocator");
-const CompressionMethod = @import("NetworkHandler.zig").CompressionMethod;
-const IdentityData = @import("data/IdentityData.zig").IdentityData;
-const ClientData = @import("data/ClientData.zig").ClientData;
-
 pub const Player = struct {
-    network_handler: ?NetworkHandler,
-    allocator: std.mem.Allocator,
+    const Self = @This();
     connection: *Connection,
     server: *Server,
-    last_packet: i64,
-    should_remove: bool,
-    identity_data: IdentityData,
-    client_data: ClientData,
+    networkHandler: NetworkHandler,
 
-    pub fn init(allocator: std.mem.Allocator, connection: *Connection, server: *Server) !Player {
-        var player = Player{
-            .allocator = allocator,
+    // Player identity information
+    username: ?[]const u8 = null,
+    xuid: ?[]const u8 = null,
+    allocator: std.mem.Allocator,
+    entityId: i64,
+    runtimeId: u64,
+
+    pub fn init(connection: *Connection, server: *Server) !Self {
+        server.lastEntityId += 1;
+        var self = Self{
             .connection = connection,
             .server = server,
-            .last_packet = std.time.milliTimestamp(),
-            .should_remove = false,
-            .identity_data = IdentityData.init(allocator),
-            .client_data = ClientData.init(allocator),
-            .network_handler = null,
+            .networkHandler = undefined, // We'll set this next
+            .username = null,
+            .xuid = null,
+            .entityId = server.lastEntityId,
+            .runtimeId = @as(u64, @intCast(server.lastEntityId)),
+            .allocator = CAllocator.get(),
         };
-        player.network_handler = NetworkHandler.init(&player);
-        player.connection.setGamePacketCallback(game_packet_callback, &player);
-        return player;
+        self.networkHandler = try NetworkHandler.init();
+        return self;
     }
 
-    pub fn handleGamePacket(self: *Player, data: []const u8) void {
-        _ = self;
-        Logger.INFO("Received game packet: {any}", .{data});
+    pub fn setPlayerInfo(self: *Self, username: ?[]const u8, xuid: ?[]const u8) !void {
+        // Free existing data if any
+        if (self.username) |old_username| {
+            self.allocator.free(old_username);
+        }
+        if (self.xuid) |old_xuid| {
+            self.allocator.free(old_xuid);
+        }
+
+        // Set new data
+        if (username) |name| {
+            self.username = try self.allocator.dupe(u8, name);
+        } else {
+            self.username = null;
+        }
+
+        if (xuid) |id| {
+            self.xuid = try self.allocator.dupe(u8, id);
+        } else {
+            self.xuid = null;
+        }
+
+        Logger.INFO("Player info set - Username: {?s}, XUID: {?s}", .{ self.username, self.xuid });
     }
 
-    pub fn game_packet_callback(data: []const u8, context: ?*anyopaque) void {
+    pub fn getPlayerInfo(self: *const Self) struct { username: ?[]const u8, xuid: ?[]const u8 } {
+        return .{ .username = self.username, .xuid = self.xuid };
+    }
+
+    pub fn deinit(self: *Self) void {
+        if (self.username) |username| {
+            self.allocator.free(username);
+        }
+        if (self.xuid) |xuid| {
+            self.allocator.free(xuid);
+        }
+    }
+
+    pub fn onGamePacket(connection: *Connection, data: []const u8, context: ?*anyopaque) void {
+        _ = connection;
         const player = @as(*Player, @ptrCast(@alignCast(context)));
-        if (player.network_handler) |*handler| {
-            handler.handleGamePacket(data);
-        }
-    }
+        player.networkHandler.handle(player, data);
 
-    pub fn deinit(self: *Player) void {
-        self.client_data.deinit();
-        self.identity_data.deinit();
-        Logger.DEBUG("Player deinitializing", .{});
-    }
-
-    pub fn tick(self: *Player) void {
-        const current_time = std.time.milliTimestamp();
-
-        if (current_time - self.last_packet > 30000) {
-            Logger.WARN("Player timed out", .{});
-            self.should_remove = true;
-            return;
-        }
-    }
-
-    pub fn shouldRemove(self: *Player) bool {
-        return self.should_remove or !self.connection.is_active.load(.acquire);
-    }
-
-    pub fn send(self: *Player, data: []const u8) !void {
-        try self.connection.send(data);
+        // if (player.network_handler) |*handler| {
+        //     handler.handleGamePacket(data);
+        // }
     }
 
     pub fn sendPacket(self: *Player, packet: []const u8) !void {
         var frames = [_][]const u8{packet};
         const framed = Framer.frame(&frames);
-        defer self.allocator.free(framed);
+        defer CAllocator.get().free(framed);
 
-        var stream = BinaryStream.init(CAllocator.get(), &[_]u8{}, 0);
-        defer stream.deinit();
-        stream.writeUint8(0xFE);
+        var buffer = std.ArrayList(u8).init(CAllocator.get());
+        try buffer.append(0xFE);
+        defer buffer.deinit();
 
-        if (self.network_handler) |nh| {
-            if (nh.compression and framed.len >= nh.compressionThreshold) {
-                stream.writeUint8(@intFromEnum(CompressionMethod.Zlib));
+        // Check if compression is enabled and if packet meets threshold
+        const compression_method = if (self.networkHandler.compression_enabled and
+            framed.len >= self.networkHandler.compression_threshold)
+            self.networkHandler.compression_method
+        else
+            CompressionMethod.NotPresent;
 
-                var compressed_data = std.ArrayList(u8).init(self.allocator);
-                defer compressed_data.deinit();
+        const compressed = try NetworkHandler.compressPacket(framed, compression_method);
+        try buffer.appendSlice(compressed);
+        defer CAllocator.get().free(compressed);
 
-                var compressor = try std.compress.flate.compressor(compressed_data.writer(), .{});
-                try compressor.writer().writeAll(framed);
-                try compressor.finish();
-
-                stream.write(compressed_data.items);
-                Logger.DEBUG("Compressed packet: {d} -> {d} bytes", .{ framed.len, compressed_data.items.len });
-            } else {
-                stream.write(framed);
-            }
-        } else {
-            stream.write(framed);
-        }
-
-        const final_packet = try stream.toOwnedSlice();
-
-        const frame = self.connection.frameIn(final_packet);
-        self.connection.sendFrame(frame, 0);
-        defer self.allocator.free(final_packet);
+        const frame = Connection.frameIn(buffer.items, CAllocator.get());
+        self.connection.sendFrame(frame, .Immediate);
     }
 };
+
+const std = @import("std");
+const CAllocator = @import("CAllocator");
+const Logger = @import("Logger").Logger;
+const Server = @import("../Server.zig").Server;
+const Connection = @import("ZigNet").Connection;
+const NetworkHandler = @import("./NetworkHandler.zig").NetworkHandler;
+const Framer = @import("../../protocol/misc/Framer.zig").Framer;
+const CompressionMethod = @import("../../protocol/enums/CompressionMethod.zig").CompressionMethod;

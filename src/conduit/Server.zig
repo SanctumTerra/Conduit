@@ -1,83 +1,36 @@
-const Logger = @import("Logger").Logger;
-const RaknetServer = @import("../raknet/Server.zig").Server;
-const Connection = @import("../raknet/Connection.zig").Connection;
-const std = @import("std");
-const Player = @import("./player/Player.zig").Player;
-const NetworkHandler = @import("./player/NetworkHandler.zig").NetworkHandler;
-
-pub const ServerConfig = struct {
-    address: []const u8 = "0.0.0.0",
-    port: u16 = 19132,
-    max_players: u16 = 60,
-    tick_rate: u16 = 20, // 20 ticks per SECOND!
-};
-
 pub const Server = struct {
-    allocator: std.mem.Allocator,
-    players: std.StringHashMap(Player),
-    raknet: RaknetServer,
-    config: ServerConfig,
-    running: std.atomic.Value(bool),
+    players: std.AutoHashMap(i64, Player),
+    options: ServerOptions,
     tick_thread: ?std.Thread,
+    running: std.atomic.Value(bool),
+    raknet: RaknetServer,
+    lastEntityId: i64,
 
-    pub fn init(allocator: std.mem.Allocator, config: ServerConfig) !Server {
+    pub fn init(options: ServerOptions) !Server {
         return Server{
-            .allocator = allocator,
-            .players = std.StringHashMap(Player).init(allocator),
-            .raknet = try RaknetServer.init(.{
-                .address = config.address,
-                .max_connections = config.max_players,
-                .port = config.port,
-            }),
-            .config = config,
-            .running = std.atomic.Value(bool).init(false),
+            .players = std.AutoHashMap(i64, Player).init(CAllocator.get()),
+            .options = options,
             .tick_thread = null,
+            .running = std.atomic.Value(bool).init(false),
+            .lastEntityId = 0,
+            .raknet = try RaknetServer.init(
+                .{
+                    .port = options.port,
+                    .address = options.address,
+                    .allocator = CAllocator.get(),
+                    // . = options.max_players,
+                },
+            ),
         };
     }
 
-    pub fn deinit(self: *Server) void {
-        self.stop();
-
-        var iterator = self.players.iterator();
-        while (iterator.next()) |entry| {
-            entry.value_ptr.deinit();
-        }
-        self.players.deinit();
-
-        self.raknet.deinit();
-        Logger.INFO("Server shut down", .{});
-    }
-
-    pub fn start(self: *Server) !void {
-        Logger.INFO("Starting server on {s}:{}", .{ self.config.address, self.config.port });
-
-        self.running.store(true, .seq_cst);
-        self.raknet.setConnectionCallback(connection_callback, self);
-        self.raknet.setDisconnectionCallback(disconnection_callback, self);
-
-        self.tick_thread = try std.Thread.spawn(.{}, tickLoop, .{self});
-        self.raknet.listen();
-    }
-
-    pub fn stop(self: *Server) void {
-        if (!self.running.load(.seq_cst)) return;
-
-        Logger.INFO("Stopping server...", .{});
-        self.running.store(false, .seq_cst);
-
-        if (self.tick_thread) |thread| {
-            thread.join();
-            self.tick_thread = null;
-        }
-    }
-
     fn tickLoop(self: *Server) void {
-        const tick_interval_ns: u64 = @as(u64, std.time.ns_per_s) / self.config.tick_rate;
+        const tick_interval_ns: u64 = @as(u64, std.time.ns_per_s) / self.options.tick_rate;
 
         while (self.running.load(.seq_cst)) {
             const start_time = std.time.nanoTimestamp();
 
-            self.tick();
+            // self.tick(); Todo! Readd tick
 
             const elapsed = std.time.nanoTimestamp() - start_time;
             if (elapsed < tick_interval_ns) {
@@ -89,81 +42,77 @@ pub const Server = struct {
         Logger.INFO("Tick thread stopped", .{});
     }
 
-    fn connection_callback(connection: *Connection, context: ?*anyopaque) void {
-        const server = @as(*Server, @ptrCast(@alignCast(context)));
-        server.handleConnection(connection) catch |err| {
-            Logger.ERROR("Failed to handle connection: {s}", .{@errorName(err)});
+    pub fn listen(self: *Server) !void {
+        self.running.store(true, .seq_cst);
+        self.tick_thread = try std.Thread.spawn(.{}, tickLoop, .{self});
+        self.raknet.setConnectCallback(onConnect, self);
+        self.raknet.setDisconnectCallback(onDisconnect, self);
+        self.raknet.start() catch |err| {
+            Logger.WARN("Failed to start server: {s}", .{@errorName(err)});
+            return err;
         };
+        Logger.INFO("Server listening on {s}:{d}", .{ self.options.address, self.options.port });
     }
 
-    fn disconnection_callback(address: std.net.Address, context: ?*anyopaque) void {
-        const server = @as(*Server, @ptrCast(@alignCast(context)));
-        server.handleDisconnectionByAddress(address);
+    pub fn stop(self: *Server) !void {
+        if (!self.running.load(.seq_cst)) return;
+        self.running.store(false, .seq_cst);
     }
 
-    fn handleConnection(self: *Server, connection: *Connection) !void {
-        const key = connection.key;
-        const new_player = try Player.init(self.allocator, connection, self);
-        try self.players.put(key, new_player);
-        const player_ptr = self.players.getPtr(key).?;
-        player_ptr.network_handler = NetworkHandler.init(player_ptr);
-        player_ptr.connection.setGamePacketCallback(Player.game_packet_callback, player_ptr);
-        Logger.INFO("Player {s} connected", .{key});
-    }
-
-    fn handleDisconnection(self: *Server, connection: *Connection) void {
-        const key = connection.key;
-        if (self.players.fetchRemove(key)) |const_entry| {
-            var player_to_deinit = const_entry.value;
-            player_to_deinit.deinit();
-            Logger.INFO("Player {s} disconnected", .{key});
-        }
-    }
-
-    fn handleDisconnectionByAddress(self: *Server, address: std.net.Address) void {
-        var buf: [48]u8 = undefined;
-        const key = std.fmt.bufPrint(&buf, "{any}", .{address}) catch |err| {
-            Logger.ERROR("Failed to format address: {s}", .{@errorName(err)});
+    pub fn onConnect(connection: *Connection, context: ?*anyopaque) void {
+        const self = @as(*Server, @ptrCast(@alignCast(context)));
+        const key = connection.guid;
+        const new_player = Player.init(connection, self) catch |err| {
+            Logger.WARN("Failed to create player: {s}", .{@errorName(err)});
             return;
         };
-        if (self.players.fetchRemove(key)) |const_entry| {
-            var player_to_deinit = const_entry.value;
-            player_to_deinit.deinit();
-            Logger.INFO("Player {s} disconnected", .{key});
-        }
+        self.players.put(key, new_player) catch |err| {
+            Logger.WARN("Failed to add player to server: {s}", .{@errorName(err)});
+            return;
+        };
+        const player_ptr = self.players.getPtr(key).?;
+        player_ptr.connection.setGamePacketCallback(Player.onGamePacket, player_ptr);
+        Logger.INFO("New Session from {d}", .{key});
     }
 
-    fn tick(self: *Server) void {
-        var iterator = self.players.iterator();
-        var players_to_disconnect = std.ArrayList([]const u8).init(self.allocator);
-        defer players_to_disconnect.deinit();
+    pub fn onDisconnect(connection: *Connection, context: ?*anyopaque) void {
+        const self = @as(*Server, @ptrCast(@alignCast(context)));
+        const key = connection.guid;
 
-        while (iterator.next()) |entry| {
-            const player = entry.value_ptr;
-            player.tick();
-            if (player.shouldRemove()) {
-                players_to_disconnect.append(entry.key_ptr.*) catch |err| {
-                    Logger.ERROR("Failed to add player key {s} to disconnect list: {}", .{ entry.key_ptr.*, err });
-                };
-            }
+        if (self.players.getPtr(key)) |player| {
+            Logger.INFO("Player disconnected - Username: {?s}, XUID: {?s}", .{ player.username, player.xuid });
+            player.deinit();
+            _ = self.players.remove(key);
         }
 
-        for (players_to_disconnect.items) |player_key_to_disconnect| {
-            if (self.players.getPtr(player_key_to_disconnect)) |player_to_disconnect| {
-                Logger.INFO("Player {s} marked for removal, initiating RakNet disconnect.", .{player_key_to_disconnect});
-                self.raknet.disconnectClient(player_to_disconnect.connection.address, player_to_disconnect.connection.key);
-            } else {
-                Logger.WARN("Player {s} was marked for removal but not found in map for RakNet disconnect.", .{player_key_to_disconnect});
-            }
-        }
+        Logger.INFO("Session {d} disconnected", .{key});
     }
 
-    pub fn broadcastPacket(self: *Server, packet: []const u8) void {
-        var iterator = self.players.iterator();
-        while (iterator.next()) |entry| {
-            entry.value_ptr.sendPacket(packet) catch |err| {
-                Logger.ERROR("Failed to send packet to player {s}: {}", .{ entry.key_ptr.*, err });
-            };
+    pub fn deinit(self: *Server) void {
+        self.stop() catch {};
+        if (self.tick_thread) |t| t.join();
+        var it = self.players.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.deinit();
         }
+        self.players.deinit();
+        self.raknet.deinit();
     }
 };
+
+pub const ServerOptions = struct {
+    address: []const u8 = "127.0.0.1",
+    port: u16 = 19132,
+    max_players: u16 = 50,
+    tick_rate: u16 = 20, // 20 ticks per SECOND!
+    compression_threshold: u16 = 1,
+    compression_method: CompressionMethod = .Zlib,
+};
+
+const std = @import("std");
+const Logger = @import("Logger").Logger;
+const CAllocator = @import("CAllocator");
+const Player = @import("./player/Player.zig").Player;
+const RaknetServer = @import("ZigNet").Server;
+const Connection = @import("ZigNet").Connection;
+const CompressionMethod = @import("../protocol/enums/CompressionMethod.zig").CompressionMethod;

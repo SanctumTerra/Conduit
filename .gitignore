@@ -1,4 +1,2 @@
-.zig-cache/
-zig-out/
-.vscode/
-.cursor/
+zig-out
+.zig-cache
