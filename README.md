@@ -11,9 +11,9 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [x] Player Spawning
 - [x] Text Handling
 - [x] Block Permutation loading
-- [ ] Chunk System
-- [ ] World System
-- [ ] Terrain Generators
+- [x] Chunk System
+- [x] World System
+- [x] Terrain Generators
 - [ ] Player Actor Flags and Abilities
 - [ ] Block Placement & Breaking
 - [ ] Entity System
