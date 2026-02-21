@@ -1,5 +1,6 @@
 pub const PROTOCOL = 924;
 pub const Login = @import("./login/root.zig");
+pub const Data = @import("./data/root.zig");
 pub const NBT = @import("nbt");
 
 pub const Packet = @import("./enums/packet.zig").Packet;
@@ -10,6 +11,7 @@ pub const ResourcePackResponse = @import("./enums/resource-pack-response.zig").R
 pub const GameMode = @import("./enums/gamemode.zig").Gamemode;
 pub const PermissionLevel = @import("./enums/permission-level.zig").PermissionLevel;
 pub const Difficulty = @import("./enums/difficulty.zig").Difficulty;
+pub const TextType = @import("./enums/text-type.zig").TextType;
 
 pub const Experiments = @import("./types/experiments.zig").Experiments;
 pub const ResourceIdVersions = @import("./types/resource-id-versions.zig").ResourceIdVersions;
