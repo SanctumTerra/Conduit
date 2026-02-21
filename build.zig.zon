@@ -5,7 +5,7 @@
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .ZigNet = .{
-            .path = "libs/ZigNet",
+            .url = "git+https://github.com/SanctumTerra/ZigNet?ref=master#9ab6ba88696bb6426c3e89b7a51f428f3ff53eb9",
         },
         .zlib = .{
             .url = "git+https://github.com/allyourcodebase/zlib.git#c2585c096171b8fbc8e5f78ab6c91b39e3573e15",
