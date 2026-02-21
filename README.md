@@ -9,7 +9,7 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [x] Accept Connections
 - [x] Handle Login
 - [x] Player Spawning
-- [ ] Text Handling
+- [x] Text Handling
 - [ ] Chunk System
 - [ ] World System
 - [ ] Player Actor Flags and Abilities
