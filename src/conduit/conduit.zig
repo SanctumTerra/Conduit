@@ -3,6 +3,9 @@ const Events = @import("events/root.zig");
 const Raknet = @import("Raknet");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 const Player = @import("./player/player.zig").Player;
+const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
+const initRegistries = @import("./world/block/root.zig").initRegistries;
+const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
@@ -27,6 +30,10 @@ pub const Conduit = struct {
     }
 
     pub fn start(self: *Conduit) !void {
+        try initRegistries(self.allocator);
+        const count = try loadBlockPermutations(self.allocator);
+        Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
+
         self.network = try NetworkHandler.init(self);
         var event = Events.types.ServerStartEvent{};
         _ = self.events.emit(Events.Event.ServerStart, &event);
@@ -48,6 +55,8 @@ pub const Conduit = struct {
     }
 
     pub fn deinit(self: *Conduit) void {
+        deinitRegistries();
+
         var it = self.players.valueIterator();
         while (it.next()) |player| {
             player.*.deinit();
