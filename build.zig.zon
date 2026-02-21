@@ -1,7 +1,7 @@
 .{
     .name = .Conduit,
     .version = "0.0.0",
-    .fingerprint = 0x40e35f673663101c,
+    .fingerprint = 0x32066b1dbd1df1eb,
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
         .zlib = .{

@@ -11,6 +11,7 @@ const CompressionOptions = @import("./compression/options.zig").CompressionOptio
 const handleNetworkSettings = @import("./handlers/request-network-settings.zig").handleNetworkSettings;
 const handleLogin = @import("./handlers/login.zig").handleLogin;
 const handleResourcePack = @import("./handlers/resource-packs-response.zig").handleResourcePack;
+const handleTextPacket = @import("./handlers/text.zig").handleTextPacket;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
@@ -78,6 +79,13 @@ pub const NetworkHandler = struct {
                     &stream,
                 ) catch |err| {
                     Raknet.Logger.ERROR("ResourcePackResponse error: {any}", .{err});
+                },
+                Packet.Text => handleTextPacket(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("Text error: {any}", .{err});
                 },
                 else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
             }
