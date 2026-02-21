@@ -3,6 +3,7 @@ name: Build
 on:
   push:
     branches: [main, master]
+    tags: ["v*"]
   pull_request:
     branches: [main, master]
 
@@ -40,3 +41,23 @@ jobs:
         with:
           name: Conduit-${{ matrix.target }}
           path: zig-out/bin/${{ matrix.artifact }}
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release files
+        run: |
+          mkdir release
+          cp artifacts/Conduit-x86_64-windows/Conduit.exe release/Conduit-windows-x86_64.exe
+          cp artifacts/Conduit-x86_64-linux/Conduit release/Conduit-linux-x86_64
+          cp artifacts/Conduit-aarch64-macos/Co
