@@ -35,3 +35,4 @@ pub const ResourcePackStackPacket = @import("./packets/resource-pack-stack.zig")
 pub const ResourcePacksInfoPacket = @import("./packets/resource-packs-info.zig").ResourcePacksInfoPacket;
 pub const ResourcePackResponsePacket = @import("./packets/resource-pack-response.zig").ResourcePackClientResponsePacket;
 pub const StartGamePacket = @import("./packets/start-game.zig").StartGamePacket;
+pub const TextPacket = @import("./packets/text.zig").TextPacket;
