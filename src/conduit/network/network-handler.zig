@@ -9,11 +9,13 @@ const Compression = @import("./compression/root.zig").Compression;
 const CompressionOptions = @import("./compression/options.zig").CompressionOptions;
 
 const handleNetworkSettings = @import("./handlers/request-network-settings.zig").handleNetworkSettings;
+const handleLogin = @import("./handlers/login.zig").handleLogin;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
     allocator: std.mem.Allocator,
     options: CompressionOptions,
+    lastRuntimeId: i64 = 0,
 
     pub fn init(c: *Conduit) !*NetworkHandler {
         const self = try c.allocator.create(NetworkHandler);
@@ -61,6 +63,13 @@ pub const NetworkHandler = struct {
                     &stream,
                 ) catch |err| {
                     Raknet.Logger.ERROR("RequestNetworkSettings error: {any}", .{err});
+                },
+                Packet.Login => handleLogin(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("LoginPacket error: {any}", .{err});
                 },
                 else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
             }

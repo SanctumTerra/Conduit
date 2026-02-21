@@ -2,12 +2,14 @@ const std = @import("std");
 const Events = @import("events/root.zig");
 const Raknet = @import("Raknet");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
+const Player = @import("./player/player.zig").Player;
 
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
+    players: std.AutoHashMap(i64, *Player),
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
         return Conduit{
@@ -19,6 +21,7 @@ pub const Conduit = struct {
                 .tick_rate = 50,
                 .allocator = allocator,
             }),
+            .players = std.AutoHashMap(i64, *Player).init(allocator),
             .network = undefined,
         };
     }
@@ -37,6 +40,13 @@ pub const Conduit = struct {
     }
 
     pub fn deinit(self: *Conduit) void {
+        var it = self.players.valueIterator();
+        while (it.next()) |player| {
+            player.*.deinit();
+            self.allocator.destroy(player.*);
+        }
+        self.players.deinit();
+
         self.events.deinit();
         self.network.deinit();
         self.raknet.deinit();
