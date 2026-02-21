@@ -1,5 +1,6 @@
 pub const PROTOCOL = 924;
 pub const Login = @import("./login/root.zig");
+pub const NBT = @import("nbt");
 
 pub const Packet = @import("./enums/packet.zig").Packet;
 pub const CompressionMethod = @import("./enums/compression-method.zig").CompressionMethod;
@@ -19,7 +20,7 @@ pub const RequestedResourcePack = @import("./types/requested-resource-pack.zig")
 pub const ServerTelemetryData = @import("./types/server-telemetry-data.zig").ServerTelemetryData;
 pub const Vector3f = @import("./types/vector3f.zig").Vector3f;
 pub const Vector2f = @import("./types/vector2f.zig").Vector2f;
-pub const Gamerules = @import("./types/game-rules.zig");
+pub const GameRules = @import("./types/game-rules.zig");
 pub const BlockPosition = @import("./types/block-position.zig").BlockPosition;
 pub const NetworkBlockTypeDefinition = @import("./types/network-block-type-definition.zig").NetworkBlockTypeDefinition;
 
@@ -31,3 +32,4 @@ pub const PlayStatusPacket = @import("./packets/play-status.zig").PlayStatus;
 pub const ResourcePackStackPacket = @import("./packets/resource-pack-stack.zig").ResourcePackStackPacket;
 pub const ResourcePacksInfoPacket = @import("./packets/resource-packs-info.zig").ResourcePacksInfoPacket;
 pub const ResourcePackResponsePacket = @import("./packets/resource-pack-response.zig").ResourcePackClientResponsePacket;
+pub const StartGamePacket = @import("./packets/start-game.zig").StartGamePacket;
