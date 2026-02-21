@@ -1,0 +1,13 @@
+# A possible list of disallowed files ( Does not mean that they all exist tho just incase ppl contribute we dont get some weird configs and stuff )
+
+zig-out
+dump
+.vscode
+.cursor
+.kiro
+.anigravity
+.cache
+.zig-cache
+.bun
+.build
+.test
