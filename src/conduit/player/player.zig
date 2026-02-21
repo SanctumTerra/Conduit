@@ -11,11 +11,15 @@ pub const Player = struct {
         allocator: std.mem.Allocator,
         connection: *Raknet.Connection,
         runtimeId: i64,
-    ) !void {
+    ) !Player {
         return Player{
             .allocator = allocator,
             .connection = connection,
             .runtimeId = runtimeId,
         };
+    }
+
+    pub fn deinit(self: *Player) void {
+        _ = self;
     }
 };
