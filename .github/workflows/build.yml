@@ -1,0 +1,44 @@
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-windows
+            artifact: Conduit.exe
+          - os: ubuntu-latest
+            target: x86_64-linux
+            artifact: Conduit
+          - os: macos-latest
+            target: aarch64-macos
+            artifact: Conduit
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.target }})
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Conduit-${{ matrix.target }}
+          path: zig-out/bin/${{ matrix.artifact }}
