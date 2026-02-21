@@ -1,5 +1,6 @@
 const std = @import("std");
-pub const CompressionMethod = @import("./types.zig").CompressionMethod;
+const CompressionMethod = @import("protocol").CompressionMethod;
+const CompressionOptions = @import("./options.zig").CompressionOptions;
 
 const c = @cImport({
     @cInclude("zlib.h");
@@ -19,10 +20,12 @@ pub const DecompressResult = struct {
 pub const Compression = struct {
     pub fn compress(
         packets: []const []const u8,
-        method: CompressionMethod,
-        threshold: u16,
+        options: CompressionOptions,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
+        const method = options.compressionMethod;
+        const threshold = options.compressionThreshold;
+
         var framed_size: usize = 0;
         for (packets) |packet| {
             framed_size += varintSize(packet.len) + packet.len;
@@ -93,8 +96,10 @@ pub const Compression = struct {
 
     pub fn decompress(
         data: []const u8,
+        options: CompressionOptions,
         allocator: std.mem.Allocator,
     ) !DecompressResult {
+        _ = options;
         if (data.len == 0 or data[0] != 254) {
             const owned = try allocator.dupe(u8, data);
             errdefer allocator.free(owned);
