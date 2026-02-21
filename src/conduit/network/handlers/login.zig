@@ -59,6 +59,8 @@ pub fn handleLogin(
     player.* = try Player.init(
         network.allocator,
         connection,
+        network,
+        data,
         network.lastRuntimeId,
     );
 
