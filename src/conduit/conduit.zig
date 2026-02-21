@@ -1,11 +1,13 @@
 const std = @import("std");
 const Events = @import("events/root.zig");
 const Raknet = @import("Raknet");
+const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
     events: Events.Events,
     raknet: Raknet.Server,
+    network: *NetworkHandler,
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
         return Conduit{
@@ -17,13 +19,16 @@ pub const Conduit = struct {
                 .tick_rate = 50,
                 .allocator = allocator,
             }),
+            .network = undefined,
         };
     }
 
     pub fn start(self: *Conduit) !void {
-        try self.raknet.start();
+        self.network = try NetworkHandler.init(self);
         var event = Events.types.ServerStartEvent{};
         _ = self.events.emit(Events.Event.ServerStart, &event);
+
+        try self.raknet.start();
     }
 
     pub fn stop(self: *Conduit) !void {
@@ -33,6 +38,7 @@ pub const Conduit = struct {
 
     pub fn deinit(self: *Conduit) void {
         self.events.deinit();
+        self.network.deinit();
         self.raknet.deinit();
     }
 };

@@ -8,6 +8,8 @@ pub fn main() !void {
         const leaked = gpa.deinit();
         if (leaked == .leak) {
             std.debug.print("Memory leak detected!\n", .{});
+        } else {
+            std.debug.print("No memory leak detected!\n", .{});
         }
     }
 
