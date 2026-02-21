@@ -1,5 +1,5 @@
 .{
-    .name = .ConduitV2,
+    .name = .Conduit,
     .version = "0.0.0",
     .fingerprint = 0x40e35f673663101c,
     .minimum_zig_version = "0.15.2",
