@@ -1,0 +1,23 @@
+## Conduit - MCBE Server Software in Zig
+
+<p>
+Why Zig? Zig is fast - very fast - and for a Bedrock server, performance really matters.
+Building Conduit in Zig means we can deliver the performance we need.
+</p>
+
+## TODO
+- [x] Accept Connections
+- [x] Handle Login
+- [x] Player Spawning
+- [ ] Text Handling
+- [ ] Chunk System
+- [ ] World System
+- [ ] Player Actor Flags and Abilities
+- [ ] Block Placement & Breaking
+- [ ] Entity System
+- [ ] Plugin API
+- [ ] Command System
+- [ ] Resource Pack loading
+
+## Discord
+<p>Join our <a href="https://discord.gg/tBpMb6Hv7S">Discord</a></p>
