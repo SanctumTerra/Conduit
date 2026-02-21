@@ -39,6 +39,14 @@ pub const Conduit = struct {
         _ = self.events.emit(.ServerShutdown, &event);
     }
 
+    pub fn getPlayerByConnection(self: *Conduit, connection: *Raknet.Connection) ?*Player {
+        var it = self.players.valueIterator();
+        while (it.next()) |player| {
+            if (player.*.connection == connection) return player.*;
+        }
+        return null;
+    }
+
     pub fn deinit(self: *Conduit) void {
         var it = self.players.valueIterator();
         while (it.next()) |player| {
