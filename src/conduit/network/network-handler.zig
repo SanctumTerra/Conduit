@@ -12,6 +12,8 @@ const handleNetworkSettings = @import("./handlers/request-network-settings.zig")
 const handleLogin = @import("./handlers/login.zig").handleLogin;
 const handleResourcePack = @import("./handlers/resource-packs-response.zig").handleResourcePack;
 const handleTextPacket = @import("./handlers/text.zig").handleTextPacket;
+const handleRequestChunkRadius = @import("./handlers/request-chunk-radius.zig").handleRequestChunkRadius;
+const handleSetLocalPlayerAsInitialized = @import("./handlers/set-local-player-as-initialized.zig").handleSetLocalPlayerAsInitialized;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
@@ -87,6 +89,20 @@ pub const NetworkHandler = struct {
                 ) catch |err| {
                     Raknet.Logger.ERROR("Text error: {any}", .{err});
                 },
+                Packet.RequestChunkRadius => handleRequestChunkRadius(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("RequestChunkRadius error: {any}", .{err});
+                },
+                Packet.SetLocalPlayerAsInitialized => handleSetLocalPlayerAsInitialized(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("SetLocalPlayerAsInitialized error: {any}", .{err});
+                },
                 else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
             }
         }
@@ -108,7 +124,7 @@ pub const NetworkHandler = struct {
     }
 
     pub fn sendPackets(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8) !void {
-        const compressed = try Compression.compress(&packets, self.options, self.allocator);
+        const compressed = try Compression.compress(packets, self.options, self.allocator);
         defer self.allocator.free(compressed);
         conn.sendReliableMessage(compressed, .Normal);
     }

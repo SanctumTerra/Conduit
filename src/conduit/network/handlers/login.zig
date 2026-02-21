@@ -64,7 +64,9 @@ pub fn handleLogin(
         network.lastRuntimeId,
     );
 
-    var event = Events.types.PlayerJoinEvent{};
+    var event = Events.types.PlayerJoinEvent{
+        .player = player,
+    };
     if (!network.conduit.events.emit(.PlayerJoin, &event)) {
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();

@@ -12,6 +12,7 @@ pub const GameMode = @import("./enums/gamemode.zig").Gamemode;
 pub const PermissionLevel = @import("./enums/permission-level.zig").PermissionLevel;
 pub const Difficulty = @import("./enums/difficulty.zig").Difficulty;
 pub const TextType = @import("./enums/text-type.zig").TextType;
+pub const DimensionType = @import("./enums/dimension-type.zig").DimensionType;
 
 pub const Experiments = @import("./types/experiments.zig").Experiments;
 pub const ResourceIdVersions = @import("./types/resource-id-versions.zig").ResourceIdVersions;
@@ -25,6 +26,7 @@ pub const Vector2f = @import("./types/vector2f.zig").Vector2f;
 pub const GameRules = @import("./types/game-rules.zig");
 pub const BlockPosition = @import("./types/block-position.zig").BlockPosition;
 pub const NetworkBlockTypeDefinition = @import("./types/network-block-type-definition.zig").NetworkBlockTypeDefinition;
+pub const ChunkCoords = @import("./types/chunk-coords.zig").ChunkCoords;
 
 pub const RequestNetworkSettingsPacket = @import("./packets/request-network-settings.zig").RequestNetworkSettings;
 pub const NetworkSettingsPacket = @import("./packets/network-settings.zig").NetworkSettings;
@@ -36,3 +38,7 @@ pub const ResourcePacksInfoPacket = @import("./packets/resource-packs-info.zig")
 pub const ResourcePackResponsePacket = @import("./packets/resource-pack-response.zig").ResourcePackClientResponsePacket;
 pub const StartGamePacket = @import("./packets/start-game.zig").StartGamePacket;
 pub const TextPacket = @import("./packets/text.zig").TextPacket;
+pub const LevelChunkPacket = @import("./packets/level-chunk.zig").LevelChunk;
+pub const RequestChunkRadiusPacket = @import("./packets/request-chunk-radius.zig").RequestChunkRadius;
+pub const ChunkRadiusUpdatePacket = @import("./packets/chunk-radius-update.zig").ChunkRadiusUpdate;
+pub const NetworkChunkPublisherUpdatePacket = @import("./packets/network-chunk-publisher-update.zig").NetworkChunkPublisherUpdate;

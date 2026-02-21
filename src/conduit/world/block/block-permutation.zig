@@ -98,6 +98,10 @@ pub const BlockPermutation = struct {
         try permutations.put(self.network_id, self);
     }
 
+    pub fn getByNetworkId(network_id: i32) ?*BlockPermutation {
+        return permutations.get(network_id);
+    }
+
     pub fn matches(self: *const BlockPermutation, state: BlockState) bool {
         var iter = state.iterator();
         while (iter.next()) |entry| {

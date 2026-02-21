@@ -3,6 +3,9 @@ const Events = @import("events/root.zig");
 const Raknet = @import("Raknet");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 const Player = @import("./player/player.zig").Player;
+const World = @import("./world/world.zig").World;
+const Generator = @import("./world/generator/root.zig");
+
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
@@ -13,6 +16,7 @@ pub const Conduit = struct {
     raknet: Raknet.Server,
     network: *NetworkHandler,
     players: std.AutoHashMap(i64, *Player),
+    worlds: std.StringHashMap(*World),
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
         return Conduit{
@@ -25,6 +29,7 @@ pub const Conduit = struct {
                 .allocator = allocator,
             }),
             .players = std.AutoHashMap(i64, *Player).init(allocator),
+            .worlds = std.StringHashMap(*World).init(allocator),
             .network = undefined,
         };
     }
@@ -33,6 +38,13 @@ pub const Conduit = struct {
         try initRegistries(self.allocator);
         const count = try loadBlockPermutations(self.allocator);
         Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
+
+        const props = Generator.GeneratorProperties.init(null, .Overworld);
+        const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
+        const threaded = try Generator.ThreadedGenerator.init(self.allocator, superflat.asGenerator(), null);
+
+        var world = try self.createWorld("world");
+        _ = try world.createDimension("overworld", .Overworld, threaded);
 
         self.network = try NetworkHandler.init(self);
         var event = Events.types.ServerStartEvent{};
@@ -54,6 +66,19 @@ pub const Conduit = struct {
         return null;
     }
 
+    pub fn createWorld(self: *Conduit, identifier: []const u8) !*World {
+        if (self.worlds.get(identifier)) |existing| return existing;
+
+        const world = try self.allocator.create(World);
+        world.* = try World.init(self, self.allocator, identifier, null);
+        try self.worlds.put(identifier, world);
+        return world;
+    }
+
+    pub fn getWorld(self: *Conduit, identifier: []const u8) ?*World {
+        return self.worlds.get(identifier);
+    }
+
     pub fn deinit(self: *Conduit) void {
         deinitRegistries();
 
@@ -63,6 +88,13 @@ pub const Conduit = struct {
             self.allocator.destroy(player.*);
         }
         self.players.deinit();
+
+        var worlds_it = self.worlds.valueIterator();
+        while (worlds_it.next()) |world| {
+            world.*.deinit();
+            self.allocator.destroy(world.*);
+        }
+        self.worlds.deinit();
 
         self.events.deinit();
         self.network.deinit();

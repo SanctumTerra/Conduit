@@ -63,7 +63,7 @@ pub fn handleResourcePack(
                         .entityId = entity_id,
                         .runtimeEntityId = runtime_entity_id,
                         .playerGamemode = .Survival,
-                        .playerPosition = Protocol.Vector3f.init(0, 100, 0),
+                        .playerPosition = Protocol.Vector3f.init(0, -58, 0),
                         .pitch = 0.0,
                         .yaw = 0.0,
                         .seed = 12345678,
