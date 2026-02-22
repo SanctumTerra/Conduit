@@ -20,6 +20,9 @@ pub const Player = struct {
     uuid: []const u8,
     flags: EntityActorFlags,
     attributes: Attributes,
+    position: Protocol.Vector3f,
+    rotation: Protocol.Vector2f,
+    motion: Protocol.Vector2f,
 
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
@@ -43,6 +46,9 @@ pub const Player = struct {
             .sent_chunks = std.AutoHashMap(i64, void).init(allocator),
             .flags = undefined,
             .attributes = Attributes.init(allocator),
+            .position = Protocol.Vector3f.init(0, 0, 0),
+            .rotation = Protocol.Vector2f.init(0, 0, 0),
+            .motion = Protocol.Vector2f.init(0, 0, 0),
         };
         player.flags = EntityActorFlags.init(&player);
 

@@ -14,6 +14,7 @@ const handleResourcePack = @import("./handlers/resource-packs-response.zig").han
 const handleTextPacket = @import("./handlers/text.zig").handleTextPacket;
 const handleRequestChunkRadius = @import("./handlers/request-chunk-radius.zig").handleRequestChunkRadius;
 const handleSetLocalPlayerAsInitialized = @import("./handlers/set-local-player-as-initialized.zig").handleSetLocalPlayerAsInitialized;
+const handlePlayerAuthInput = @import("./handlers/player-auth-input.zig").handlePlayerAuthInput;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
@@ -102,6 +103,13 @@ pub const NetworkHandler = struct {
                     &stream,
                 ) catch |err| {
                     Raknet.Logger.ERROR("SetLocalPlayerAsInitialized error: {any}", .{err});
+                },
+                Packet.PlayerAuthInput => handlePlayerAuthInput(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("PlayerAuthInput error: {any}", .{err});
                 },
                 else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
             }
