@@ -60,4 +60,9 @@ jobs:
           mkdir release
           cp artifacts/Conduit-x86_64-windows/Conduit.exe release/Conduit-windows-x86_64.exe
           cp artifacts/Conduit-x86_64-linux/Conduit release/Conduit-linux-x86_64
-          cp artifacts/Conduit-aarch64-macos/Co
+          cp artifacts/Conduit-aarch64-macos/Conduit release/Conduit-macos-aarch64
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
