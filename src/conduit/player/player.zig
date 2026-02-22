@@ -85,6 +85,22 @@ pub const Player = struct {
         Raknet.Logger.INFO("Player {s} has spawned.", .{self.username});
     }
 
+    pub fn broadcastActorFlags(self: *Player) !void {
+        var str = BinaryStream.init(self.allocator, null, null);
+        defer str.deinit();
+
+        const data = try self.flags.buildDataItems(self.allocator);
+        var packet = Protocol.SetActorDataPacket.init(self.allocator, self.runtimeId, 0, data);
+        defer packet.deinit();
+        const serialized = try packet.serialize(&str);
+
+        const snapshots = self.network.conduit.getPlayerSnapshots();
+        for (snapshots) |other| {
+            if (!other.spawned) continue;
+            try self.network.sendPacket(other.connection, serialized);
+        }
+    }
+
     fn sendSpawnChunks(self: *Player) !void {
         const world = self.network.conduit.getWorld("world") orelse return;
         const overworld = world.getDimension("overworld") orelse return;

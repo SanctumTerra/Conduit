@@ -18,6 +18,7 @@ pub const Conduit = struct {
     players: std.AutoHashMap(i64, *Player),
     connection_map: std.AutoHashMap(usize, *Player),
     players_mutex: std.Thread.Mutex,
+    snapshot_buf: std.ArrayList(*Player),
     worlds: std.StringHashMap(*World),
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
@@ -33,6 +34,7 @@ pub const Conduit = struct {
             .players = std.AutoHashMap(i64, *Player).init(allocator),
             .connection_map = std.AutoHashMap(usize, *Player).init(allocator),
             .players_mutex = std.Thread.Mutex{},
+            .snapshot_buf = std.ArrayList(*Player){ .items = &.{}, .capacity = 0 },
             .worlds = std.StringHashMap(*World).init(allocator),
             .network = undefined,
         };
@@ -83,18 +85,15 @@ pub const Conduit = struct {
         _ = self.connection_map.remove(@intFromPtr(player.connection));
     }
 
-    pub fn getPlayerSnapshots(self: *Conduit, buf: []?*Player) usize {
+    pub fn getPlayerSnapshots(self: *Conduit) []*Player {
         self.players_mutex.lock();
         defer self.players_mutex.unlock();
-        if (self.players.count() == 0) return 0;
+        self.snapshot_buf.clearRetainingCapacity();
         var it = self.players.valueIterator();
-        var i: usize = 0;
         while (it.next()) |p| {
-            if (i >= buf.len) break;
-            buf[i] = p.*;
-            i += 1;
+            self.snapshot_buf.append(self.allocator, p.*) catch break;
         }
-        return i;
+        return self.snapshot_buf.items;
     }
 
     pub fn createWorld(self: *Conduit, identifier: []const u8) !*World {
@@ -111,6 +110,9 @@ pub const Conduit = struct {
     }
 
     pub fn deinit(self: *Conduit) void {
+        // Deinit raknet first so we dont receive any more packets
+        self.raknet.deinit();
+
         deinitRegistries();
 
         var it = self.players.valueIterator();
@@ -120,6 +122,7 @@ pub const Conduit = struct {
         }
         self.players.deinit();
         self.connection_map.deinit();
+        self.snapshot_buf.deinit(self.allocator);
 
         var worlds_it = self.worlds.valueIterator();
         while (worlds_it.next()) |world| {
@@ -130,6 +133,5 @@ pub const Conduit = struct {
 
         self.events.deinit();
         self.network.deinit();
-        self.raknet.deinit();
     }
 };

@@ -78,3 +78,4 @@ pub const PlayerListPacket = @import("./packets/player-list.zig").PlayerListPack
 pub const UpdateAbilitiesPacket = @import("./packets/update-abilities.zig").UpdateAbilitiesPacket;
 pub const AddPlayerPacket = @import("./packets/add-player.zig").AddPlayerPacket;
 pub const MoveActorDeltaPacket = @import("./packets/move-actor-delta.zig").MoveActorDeltaPacket;
+pub const AnimatePacket = @import("./packets/animate.zig").AnimatePacket;

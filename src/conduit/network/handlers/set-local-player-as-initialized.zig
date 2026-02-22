@@ -16,15 +16,12 @@ pub fn handleSetLocalPlayerAsInitialized(
     player.spawned = true;
     player.onSpawn();
 
-    var snapshot_buf: [64]?*Player = .{null} ** 64;
-    const snap_count = network.conduit.getPlayerSnapshots(&snapshot_buf);
-    const snapshots = snapshot_buf[0..snap_count];
+    const snapshots = network.conduit.getPlayerSnapshots();
 
     var all_entries = std.ArrayList(Protocol.PlayerListEntry){ .items = &.{}, .capacity = 0 };
     defer all_entries.deinit(network.allocator);
 
-    for (snapshots) |maybe_p| {
-        const p = maybe_p orelse continue;
+    for (snapshots) |p| {
         try all_entries.append(network.allocator, .{
             .uuid = p.uuid,
             .entityUniqueId = p.runtimeId,
@@ -59,8 +56,7 @@ pub fn handleSetLocalPlayerAsInitialized(
     };
     const new_serialized = try new_packet.serialize(&new_stream, network.allocator);
 
-    for (snapshots) |maybe_other| {
-        const other = maybe_other orelse continue;
+    for (snapshots) |other| {
         if (other.runtimeId == player.runtimeId) continue;
 
         try network.sendPacket(other.connection, new_serialized);
@@ -90,5 +86,21 @@ pub fn handleSetLocalPlayerAsInitialized(
         };
         const other_serialized = try other_packet.serialize(&other_stream);
         try network.sendPacket(connection, other_serialized);
+
+        var other_flags_stream = BinaryStream.init(network.allocator, null, null);
+        defer other_flags_stream.deinit();
+        const other_flags_data = try other.flags.buildDataItems(network.allocator);
+        var other_flags_packet = Protocol.SetActorDataPacket.init(network.allocator, other.runtimeId, 0, other_flags_data);
+        defer other_flags_packet.deinit();
+        const other_flags_serialized = try other_flags_packet.serialize(&other_flags_stream);
+        try network.sendPacket(connection, other_flags_serialized);
+
+        var new_flags_stream = BinaryStream.init(network.allocator, null, null);
+        defer new_flags_stream.deinit();
+        const new_flags_data = try player.flags.buildDataItems(network.allocator);
+        var new_flags_packet = Protocol.SetActorDataPacket.init(network.allocator, player.runtimeId, 0, new_flags_data);
+        defer new_flags_packet.deinit();
+        const new_flags_serialized = try new_flags_packet.serialize(&new_flags_stream);
+        try network.sendPacket(other.connection, new_flags_serialized);
     }
 }

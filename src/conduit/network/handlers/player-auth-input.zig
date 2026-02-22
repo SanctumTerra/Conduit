@@ -12,31 +12,31 @@ pub fn handlePlayerAuthInput(
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
     const packet = try Protocol.PlayerAuthInputPacket.deserialize(stream);
 
-    const old_pos = player.position;
-    const old_rot = player.rotation;
-    const old_head_yaw = player.head_yaw;
-
     player.position = packet.position;
     player.rotation = packet.rotation;
     player.motion = packet.motion;
     player.head_yaw = packet.headYaw;
 
-    var flags: u16 = MoveDeltaFlags.None;
-    if (packet.position.x != old_pos.x) flags |= MoveDeltaFlags.HasX;
-    if (packet.position.y != old_pos.y) flags |= MoveDeltaFlags.HasY;
-    if (packet.position.z != old_pos.z) flags |= MoveDeltaFlags.HasZ;
-    if (packet.rotation.x != old_rot.x) flags |= MoveDeltaFlags.HasRotX;
-    if (packet.rotation.y != old_rot.y) flags |= MoveDeltaFlags.HasRotY;
-    if (packet.headYaw != old_head_yaw) flags |= MoveDeltaFlags.HasRotZ;
-
-    if (flags == MoveDeltaFlags.None) return;
+    // Flags
+    {
+        var flags_changed = false;
+        if (packet.inputData.hasFlag(.StartSneaking)) {
+            player.flags.setFlag(.Sneaking, true);
+            flags_changed = true;
+        }
+        if (packet.inputData.hasFlag(.StopSneaking)) {
+            player.flags.setFlag(.Sneaking, false);
+            flags_changed = true;
+        }
+        if (flags_changed) try player.broadcastActorFlags();
+    }
 
     var move_stream = BinaryStream.init(network.allocator, null, null);
     defer move_stream.deinit();
 
     const move_packet = Protocol.MoveActorDeltaPacket{
         .runtime_id = @intCast(player.runtimeId),
-        .flags = flags,
+        .flags = MoveDeltaFlags.All,
         .x = packet.position.x,
         .y = packet.position.y,
         .z = packet.position.z,
@@ -46,10 +46,8 @@ pub fn handlePlayerAuthInput(
     };
     const serialized = try move_packet.serialize(&move_stream);
 
-    var snapshot_buf: [64]?*@import("../../player/player.zig").Player = .{null} ** 64;
-    const count = network.conduit.getPlayerSnapshots(&snapshot_buf);
-    for (snapshot_buf[0..count]) |maybe_other| {
-        const other = maybe_other orelse continue;
+    const snapshots = network.conduit.getPlayerSnapshots();
+    for (snapshots) |other| {
         if (other.runtimeId == player.runtimeId) continue;
         if (!other.spawned) continue;
         try network.sendPacket(other.connection, serialized);
