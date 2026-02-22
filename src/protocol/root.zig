@@ -16,6 +16,7 @@ pub const DimensionType = @import("./enums/dimension-type.zig").DimensionType;
 pub const ActorDataType = @import("./enums/actor-data-type.zig").ActorDataType;
 pub const ActorDataId = @import("./enums/actor-data-id.zig").ActorDataId;
 pub const ActorFlags = @import("./enums/actor-flags.zig").ActorFlags;
+pub const AttributeName = @import("./enums/attribute-name.zig").AttributeName;
 
 pub const Experiments = @import("./types/experiments.zig").Experiments;
 pub const ResourceIdVersions = @import("./types/resource-id-versions.zig").ResourceIdVersions;
@@ -34,6 +35,8 @@ pub const SerializableCells = @import("./types/serializable-cells.zig").Serializ
 pub const SerializableVoxelShape = @import("./types/serializable-voxel-shape.zig").SerializableVoxelShape;
 pub const PropertySyncData = @import("./types/property-sync-data.zig").PropertySyncData;
 pub const DataItem = @import("./types/data-item.zig").DataItem;
+pub const AttributeModifier = @import("./types/attribute-modifier.zig").AttributeModifier;
+pub const Attribute = @import("./types/attribute.zig").Attribute;
 
 pub const RequestNetworkSettingsPacket = @import("./packets/request-network-settings.zig").RequestNetworkSettings;
 pub const NetworkSettingsPacket = @import("./packets/network-settings.zig").NetworkSettings;
@@ -52,3 +55,4 @@ pub const NetworkChunkPublisherUpdatePacket = @import("./packets/network-chunk-p
 pub const AvailableActorIdentifiersPacket = @import("./packets/available-actor-identifiers.zig").AvailableActorIdentifiersPacket;
 pub const VoxelShapesPacket = @import("./packets/voxel-shapes.zig").VoxelShapesPacket;
 pub const SetActorDataPacket = @import("./packets/set-actor-data.zig").SetActorDataPacket;
+pub const UpdateAttributesPacket = @import("./packets/update-attributes.zig").UpdateAttributesPacket;
