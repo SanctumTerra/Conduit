@@ -14,7 +14,7 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [x] Chunk System
 - [x] World System
 - [x] Terrain Generators
-- [ ] Player Actor Flags and Abilities
+- [x] Player Actor Flags and Abilities
 - [ ] Block Placement & Breaking
 - [ ] Entity System
 - [ ] Plugin API
