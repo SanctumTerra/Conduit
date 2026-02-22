@@ -17,7 +17,7 @@ pub const ServerProperties = struct {
         .port = "What port should the server run on",
         .motd = "What motd should server display in the server list",
         .max_players = "Max Player count on the server",
-        .online_mode = "Whether to use online mode",
+        .online_mode = "Whether to use online mode (WIP)",
         .max_tps = "Max tps",
     };
 

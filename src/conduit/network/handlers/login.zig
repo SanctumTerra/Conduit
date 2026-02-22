@@ -11,6 +11,8 @@ pub fn handleLogin(
     connection: *Raknet.Connection,
     stream: *BinaryStream,
 ) !void {
+    // TODO Offline mode
+
     const login = try Protocol.LoginPacket.deserialize(stream);
     if (login.protocol != Protocol.PROTOCOL) {
         var str = BinaryStream.init(network.allocator, null, null);
@@ -22,6 +24,19 @@ pub fn handleLogin(
         var disconnect = Protocol.DisconnectPacket{
             .hideScreen = true,
             .reason = reason,
+        };
+        const serialized = try disconnect.serialize(&str);
+        try network.sendPacket(connection, serialized);
+        return;
+    }
+
+    const player_count = network.conduit.players.count();
+    if (player_count >= network.conduit.config.max_players) {
+        var str = BinaryStream.init(network.allocator, null, null);
+        defer str.deinit();
+        var disconnect = Protocol.DisconnectPacket{
+            .hideScreen = true,
+            .reason = .ServerFull,
         };
         const serialized = try disconnect.serialize(&str);
         try network.sendPacket(connection, serialized);

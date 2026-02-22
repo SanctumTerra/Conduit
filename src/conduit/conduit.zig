@@ -1,6 +1,7 @@
 const std = @import("std");
 const Events = @import("events/root.zig");
 const Raknet = @import("Raknet");
+const Protocol = @import("protocol");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 const Player = @import("./player/player.zig").Player;
 const World = @import("./world/world.zig").World;
@@ -32,8 +33,19 @@ pub const Conduit = struct {
             .raknet = try Raknet.Server.init(.{
                 .address = config.address,
                 .port = config.port,
-                .tick_rate = 50,
+                .tick_rate = @intCast(config.max_tps),
                 .allocator = allocator,
+                .advertisement = .{
+                    .game_type = .MCPE,
+                    .level_name = config.motd,
+                    .protocol = Protocol.PROTOCOL,
+                    .version = "26.1",
+                    .player_count = 0,
+                    .max_players = @intCast(config.max_players),
+                    .guid = 0,
+                    .name = config.motd,
+                    .gamemode = "Survival",
+                },
             }),
             .players = std.AutoHashMap(i64, *Player).init(allocator),
             .connection_map = std.AutoHashMap(usize, *Player).init(allocator),
@@ -80,6 +92,7 @@ pub const Conduit = struct {
         defer self.players_mutex.unlock();
         try self.players.put(player.runtimeId, player);
         try self.connection_map.put(@intFromPtr(player.connection), player);
+        self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
 
     pub fn removePlayer(self: *Conduit, player: *Player) void {
@@ -87,6 +100,7 @@ pub const Conduit = struct {
         defer self.players_mutex.unlock();
         _ = self.players.remove(player.runtimeId);
         _ = self.connection_map.remove(@intFromPtr(player.connection));
+        self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
 
     pub fn getPlayerSnapshots(self: *Conduit) []*Player {
