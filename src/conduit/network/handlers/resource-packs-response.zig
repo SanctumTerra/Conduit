@@ -189,6 +189,19 @@ pub fn handleResourcePack(
                     try network.sendPacket(player.connection, serialized);
                 }
 
+                // SetActorDataPacket
+                {
+                    var str = BinaryStream.init(network.allocator, null, null);
+                    defer str.deinit();
+
+                    const data = try player.flags.buildDataItems(network.allocator);
+                    var packet = Protocol.SetActorDataPacket.init(network.allocator, player.runtimeId, 0, data);
+                    defer packet.deinit();
+
+                    const serialized = try packet.serialize(&str);
+                    try network.sendPacket(player.connection, serialized);
+                }
+
                 // PlayStatusPacket
                 {
                     var str = BinaryStream.init(network.allocator, null, null);

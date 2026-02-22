@@ -5,6 +5,7 @@ const Protocol = @import("protocol");
 const LoginData = Protocol.Login.Decoder.LoginData;
 pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
+const EntityActorFlags = @import("../entity/root.zig").EntityActorFlags;
 
 pub const Player = struct {
     allocator: std.mem.Allocator,
@@ -16,6 +17,8 @@ pub const Player = struct {
     xuid: []const u8,
     username: []const u8,
     uuid: []const u8,
+    flags: EntityActorFlags,
+
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
 
@@ -26,7 +29,7 @@ pub const Player = struct {
         loginData: LoginData,
         runtimeId: i64,
     ) !Player {
-        return Player{
+        var player = Player{
             .allocator = allocator,
             .connection = connection,
             .network = network,
@@ -36,7 +39,13 @@ pub const Player = struct {
             .username = loginData.identity_data.display_name,
             .uuid = loginData.identity_data.identity,
             .sent_chunks = std.AutoHashMap(i64, void).init(allocator),
+            .flags = undefined,
         };
+        player.flags = EntityActorFlags.init(&player);
+
+        player.flags.setFlag(.HasGravity, true);
+        player.flags.setFlag(.Breathing, true);
+        return player;
     }
 
     pub fn deinit(self: *Player) void {
