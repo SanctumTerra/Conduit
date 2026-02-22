@@ -6,6 +6,7 @@ const LoginData = Protocol.Login.Decoder.LoginData;
 pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const EntityActorFlags = @import("../entity/root.zig").EntityActorFlags;
+const Attributes = @import("../entity/root.zig").Attributes;
 
 pub const Player = struct {
     allocator: std.mem.Allocator,
@@ -18,6 +19,7 @@ pub const Player = struct {
     username: []const u8,
     uuid: []const u8,
     flags: EntityActorFlags,
+    attributes: Attributes,
 
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
@@ -40,17 +42,23 @@ pub const Player = struct {
             .uuid = loginData.identity_data.identity,
             .sent_chunks = std.AutoHashMap(i64, void).init(allocator),
             .flags = undefined,
+            .attributes = Attributes.init(allocator),
         };
         player.flags = EntityActorFlags.init(&player);
 
         player.flags.setFlag(.HasGravity, true);
         player.flags.setFlag(.Breathing, true);
+        player.attributes.registerWithCurrent(.Movement, 0, 3.4028235e+38, 0.1, 0.1) catch {};
+        player.attributes.registerWithCurrent(.UnderwaterMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};
+        player.attributes.registerWithCurrent(.LavaMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};
+
         return player;
     }
 
     pub fn deinit(self: *Player) void {
         self.sent_chunks.deinit();
         self.loginData.deinit();
+        self.attributes.deinit();
     }
 
     pub fn disconnect(self: *Player) !void {

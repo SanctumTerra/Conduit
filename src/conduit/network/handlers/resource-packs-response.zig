@@ -202,6 +202,23 @@ pub fn handleResourcePack(
                     try network.sendPacket(player.connection, serialized);
                 }
 
+                {
+                    var str = BinaryStream.init(network.allocator, null, null);
+                    defer str.deinit();
+
+                    var attrs = try player.attributes.collectAll(network.allocator);
+                    defer attrs.deinit(network.allocator);
+
+                    var packet = Protocol.UpdateAttributesPacket{
+                        .runtime_actor_id = player.runtimeId,
+                        .attributes = attrs,
+                        .tick = 0,
+                    };
+
+                    const serialized = try packet.serialize(&str);
+                    try network.sendPacket(player.connection, serialized);
+                }
+
                 // PlayStatusPacket
                 {
                     var str = BinaryStream.init(network.allocator, null, null);
