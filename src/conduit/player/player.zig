@@ -26,6 +26,7 @@ pub const Player = struct {
 
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
+    spawned: bool = false,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -47,8 +48,8 @@ pub const Player = struct {
             .flags = undefined,
             .attributes = Attributes.init(allocator),
             .position = Protocol.Vector3f.init(0, 0, 0),
-            .rotation = Protocol.Vector2f.init(0, 0, 0),
-            .motion = Protocol.Vector2f.init(0, 0, 0),
+            .rotation = Protocol.Vector2f.init(0, 0),
+            .motion = Protocol.Vector2f.init(0, 0),
         };
         player.flags = EntityActorFlags.init(&player);
 
