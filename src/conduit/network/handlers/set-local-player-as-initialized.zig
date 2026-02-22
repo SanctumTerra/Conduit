@@ -28,6 +28,7 @@ pub fn handleSetLocalPlayerAsInitialized(
             .username = p.username,
             .xuid = p.xuid,
             .skin = &p.loginData.client_data,
+            .buildPlatform = @intCast(p.loginData.client_data.device_os),
         });
     }
 
@@ -46,6 +47,7 @@ pub fn handleSetLocalPlayerAsInitialized(
         .username = player.username,
         .xuid = player.xuid,
         .skin = &player.loginData.client_data,
+        .buildPlatform = @intCast(player.loginData.client_data.device_os),
     }};
 
     var new_stream = BinaryStream.init(network.allocator, null, null);
@@ -74,6 +76,15 @@ pub fn handleSetLocalPlayerAsInitialized(
         const add_serialized = try add_packet.serialize(&add_stream);
         try network.sendPacket(other.connection, add_serialized);
 
+        var skin_new_stream = BinaryStream.init(network.allocator, null, null);
+        defer skin_new_stream.deinit();
+        const skin_new_packet = Protocol.PlayerSkinPacket{
+            .uuid = player.uuid,
+            .skin = &player.loginData.client_data,
+        };
+        const skin_new_serialized = try skin_new_packet.serialize(&skin_new_stream, network.allocator);
+        try network.sendPacket(other.connection, skin_new_serialized);
+
         var other_stream = BinaryStream.init(network.allocator, null, null);
         defer other_stream.deinit();
         const other_packet = Protocol.AddPlayerPacket{
@@ -86,6 +97,15 @@ pub fn handleSetLocalPlayerAsInitialized(
         };
         const other_serialized = try other_packet.serialize(&other_stream);
         try network.sendPacket(connection, other_serialized);
+
+        var skin_other_stream = BinaryStream.init(network.allocator, null, null);
+        defer skin_other_stream.deinit();
+        const skin_other_packet = Protocol.PlayerSkinPacket{
+            .uuid = other.uuid,
+            .skin = &other.loginData.client_data,
+        };
+        const skin_other_serialized = try skin_other_packet.serialize(&skin_other_stream, network.allocator);
+        try network.sendPacket(connection, skin_other_serialized);
 
         var other_flags_stream = BinaryStream.init(network.allocator, null, null);
         defer other_flags_stream.deinit();

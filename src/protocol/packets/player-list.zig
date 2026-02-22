@@ -18,8 +18,12 @@ pub const PlayerListPacket = struct {
                 for (self.entries) |entry| {
                     try PlayerListEntry.writeAdd(stream, entry, allocator);
                 }
-                for (self.entries) |_| {
-                    try stream.writeBool(true);
+                for (self.entries) |entry| {
+                    if (entry.skin) |skin| {
+                        try stream.writeBool(skin.trusted_skin);
+                    } else {
+                        try stream.writeBool(true);
+                    }
                 }
             },
             .Remove => {

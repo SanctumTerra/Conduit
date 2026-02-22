@@ -58,6 +58,7 @@ pub const Player = struct {
 
         player.flags.setFlag(.HasGravity, true);
         player.flags.setFlag(.Breathing, true);
+        player.flags.setFlag(.ShowName, true);
         player.flags.setFlag(.AlwaysShowName, true);
         player.attributes.registerWithCurrent(.Movement, 0, 3.4028235e+38, 0.1, 0.1) catch {};
         player.attributes.registerWithCurrent(.UnderwaterMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};

@@ -15,11 +15,14 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [x] World System
 - [x] Terrain Generators
 - [x] Player Actor Flags and Abilities
+- [x] MultiPlayer
+- [ ] Inventory System
 - [ ] Block Placement & Breaking
 - [ ] Entity System
 - [ ] Plugin API
 - [ ] Command System
 - [ ] Resource Pack loading
+- [ ] Multi World System
 
 ## Discord
 <p>Join our <a href="https://discord.gg/tBpMb6Hv7S">Discord</a></p>

@@ -9,7 +9,6 @@ pub fn handleClientCacheStatus(
     stream: *BinaryStream,
 ) !void {
     const status = try Protocol.ClientCacheStatusPacket.deserialize(stream);
-    Raknet.Logger.INFO("ClientCacheStatus: enabled={}", .{status.enabled});
 
     var write = BinaryStream.init(network.allocator, null, null);
     defer write.deinit();

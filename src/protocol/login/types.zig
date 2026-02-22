@@ -43,12 +43,36 @@ pub const IdentityData = struct {
     }
 };
 
+pub const SkinAnimation = struct {
+    image: []const u8,
+    image_width: i64,
+    image_height: i64,
+    animation_type: i64,
+    frames: f64,
+    expression_type: i64,
+};
+
+pub const PersonaPiece = struct {
+    piece_id: []const u8,
+    piece_type: []const u8,
+    pack_id: []const u8,
+    is_default: bool,
+    product_id: []const u8,
+};
+
+pub const PersonaPieceTintColour = struct {
+    piece_type: []const u8,
+    colours: [4][]const u8,
+};
+
 pub const ClientData = struct {
     skin_id: []const u8,
+    play_fab_id: []const u8,
     skin_data: []const u8,
     skin_image_width: i64,
     skin_image_height: i64,
     skin_geometry_data: []const u8,
+    skin_geometry_data_engine_version: []const u8,
     skin_resource_patch: []const u8,
     skin_animation_data: []const u8,
 
@@ -59,8 +83,14 @@ pub const ClientData = struct {
 
     persona_skin: bool,
     premium_skin: bool,
+    cape_on_classic_skin: bool,
+    trusted_skin: bool,
     arm_size: []const u8,
     skin_color: []const u8,
+
+    animated_image_data: []const SkinAnimation,
+    persona_pieces: []const PersonaPiece,
+    piece_tint_colours: []const PersonaPieceTintColour,
 
     device_model: []const u8,
     device_os: i64,
@@ -108,12 +138,82 @@ pub const ClientData = struct {
             }
         }.get;
 
+        const animated_image_data = blk: {
+            const arr_val = obj.get("AnimatedImageData") orelse break :blk &[0]SkinAnimation{};
+            if (arr_val != .array) break :blk &[0]SkinAnimation{};
+            const arr = arr_val.array;
+            if (arr.items.len == 0) break :blk &[0]SkinAnimation{};
+            const anims = try allocator.alloc(SkinAnimation, arr.items.len);
+            for (arr.items, 0..) |item, i| {
+                const a = item.object;
+                anims[i] = .{
+                    .image = if (a.get("Image")) |v| try allocator.dupe(u8, v.string) else "",
+                    .image_width = if (a.get("ImageWidth")) |v| v.integer else 0,
+                    .image_height = if (a.get("ImageHeight")) |v| v.integer else 0,
+                    .animation_type = if (a.get("Type")) |v| v.integer else 0,
+                    .frames = if (a.get("Frames")) |v| switch (v) {
+                        .float => v.float,
+                        .integer => @as(f64, @floatFromInt(v.integer)),
+                        else => 0.0,
+                    } else 0.0,
+                    .expression_type = if (a.get("AnimationExpression")) |v| v.integer else 0,
+                };
+            }
+            break :blk anims;
+        };
+
+        const persona_pieces = blk: {
+            const arr_val = obj.get("PersonaPieces") orelse break :blk &[0]PersonaPiece{};
+            if (arr_val != .array) break :blk &[0]PersonaPiece{};
+            const arr = arr_val.array;
+            if (arr.items.len == 0) break :blk &[0]PersonaPiece{};
+            const pieces = try allocator.alloc(PersonaPiece, arr.items.len);
+            for (arr.items, 0..) |item, i| {
+                const p = item.object;
+                pieces[i] = .{
+                    .piece_id = if (p.get("PieceId")) |v| try allocator.dupe(u8, v.string) else "",
+                    .piece_type = if (p.get("PieceType")) |v| try allocator.dupe(u8, v.string) else "",
+                    .pack_id = if (p.get("PackId")) |v| try allocator.dupe(u8, v.string) else "",
+                    .is_default = if (p.get("IsDefault")) |v| v.bool else false,
+                    .product_id = if (p.get("ProductId")) |v| try allocator.dupe(u8, v.string) else "",
+                };
+            }
+            break :blk pieces;
+        };
+
+        const piece_tint_colours = blk: {
+            const arr_val = obj.get("PieceTintColors") orelse break :blk &[0]PersonaPieceTintColour{};
+            if (arr_val != .array) break :blk &[0]PersonaPieceTintColour{};
+            const arr = arr_val.array;
+            if (arr.items.len == 0) break :blk &[0]PersonaPieceTintColour{};
+            const tints = try allocator.alloc(PersonaPieceTintColour, arr.items.len);
+            for (arr.items, 0..) |item, i| {
+                const t = item.object;
+                var colours: [4][]const u8 = .{ "", "", "", "" };
+                if (t.get("Colors")) |cv| {
+                    if (cv == .array) {
+                        for (cv.array.items, 0..) |c, ci| {
+                            if (ci >= 4) break;
+                            colours[ci] = try allocator.dupe(u8, c.string);
+                        }
+                    }
+                }
+                tints[i] = .{
+                    .piece_type = if (t.get("PieceType")) |v| try allocator.dupe(u8, v.string) else "",
+                    .colours = colours,
+                };
+            }
+            break :blk tints;
+        };
+
         return ClientData{
             .skin_id = try getString(obj, "SkinId", allocator),
+            .play_fab_id = try getString(obj, "PlayFabId", allocator),
             .skin_data = try getString(obj, "SkinData", allocator),
             .skin_image_width = getInt(obj, "SkinImageWidth"),
             .skin_image_height = getInt(obj, "SkinImageHeight"),
             .skin_geometry_data = try getString(obj, "SkinGeometryData", allocator),
+            .skin_geometry_data_engine_version = try getString(obj, "SkinGeometryDataEngineVersion", allocator),
             .skin_resource_patch = try getString(obj, "SkinResourcePatch", allocator),
             .skin_animation_data = try getString(obj, "SkinAnimationData", allocator),
 
@@ -124,8 +224,14 @@ pub const ClientData = struct {
 
             .persona_skin = getBool(obj, "PersonaSkin"),
             .premium_skin = getBool(obj, "PremiumSkin"),
+            .cape_on_classic_skin = getBool(obj, "CapeOnClassicSkin"),
+            .trusted_skin = getBool(obj, "TrustedSkin"),
             .arm_size = try getString(obj, "ArmSize", allocator),
             .skin_color = try getString(obj, "SkinColor", allocator),
+
+            .animated_image_data = animated_image_data,
+            .persona_pieces = persona_pieces,
+            .piece_tint_colours = piece_tint_colours,
 
             .device_model = try getString(obj, "DeviceModel", allocator),
             .device_os = getInt(obj, "DeviceOS"),
@@ -146,6 +252,27 @@ pub const ClientData = struct {
     }
 
     pub fn deinit(self: *ClientData, allocator: std.mem.Allocator) void {
+        for (self.animated_image_data) |anim| {
+            if (anim.image.len > 0) allocator.free(anim.image);
+        }
+        if (self.animated_image_data.len > 0) allocator.free(self.animated_image_data);
+
+        for (self.persona_pieces) |piece| {
+            if (piece.piece_id.len > 0) allocator.free(piece.piece_id);
+            if (piece.piece_type.len > 0) allocator.free(piece.piece_type);
+            if (piece.pack_id.len > 0) allocator.free(piece.pack_id);
+            if (piece.product_id.len > 0) allocator.free(piece.product_id);
+        }
+        if (self.persona_pieces.len > 0) allocator.free(self.persona_pieces);
+
+        for (self.piece_tint_colours) |tint| {
+            if (tint.piece_type.len > 0) allocator.free(tint.piece_type);
+            for (tint.colours) |c| {
+                if (c.len > 0) allocator.free(c);
+            }
+        }
+        if (self.piece_tint_colours.len > 0) allocator.free(self.piece_tint_colours);
+
         inline for (@typeInfo(ClientData).@"struct".fields) |field| {
             if (field.type == []const u8) {
                 const value = @field(self, field.name);

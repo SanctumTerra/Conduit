@@ -9,7 +9,6 @@ pub fn handleResourcePack(
     stream: *BinaryStream,
 ) !void {
     const response = try Protocol.ResourcePackResponsePacket.deserialize(stream);
-    Raknet.Logger.INFO("PACKET {any}", .{response});
 
     switch (response.response) {
         .HaveAllPacks => {
