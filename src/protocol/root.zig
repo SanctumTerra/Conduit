@@ -27,6 +27,8 @@ pub const GameRules = @import("./types/game-rules.zig");
 pub const BlockPosition = @import("./types/block-position.zig").BlockPosition;
 pub const NetworkBlockTypeDefinition = @import("./types/network-block-type-definition.zig").NetworkBlockTypeDefinition;
 pub const ChunkCoords = @import("./types/chunk-coords.zig").ChunkCoords;
+pub const SerializableCells = @import("./types/serializable-cells.zig").SerializableCells;
+pub const SerializableVoxelShape = @import("./types/serializable-voxel-shape.zig").SerializableVoxelShape;
 
 pub const RequestNetworkSettingsPacket = @import("./packets/request-network-settings.zig").RequestNetworkSettings;
 pub const NetworkSettingsPacket = @import("./packets/network-settings.zig").NetworkSettings;
@@ -42,3 +44,5 @@ pub const LevelChunkPacket = @import("./packets/level-chunk.zig").LevelChunk;
 pub const RequestChunkRadiusPacket = @import("./packets/request-chunk-radius.zig").RequestChunkRadius;
 pub const ChunkRadiusUpdatePacket = @import("./packets/chunk-radius-update.zig").ChunkRadiusUpdate;
 pub const NetworkChunkPublisherUpdatePacket = @import("./packets/network-chunk-publisher-update.zig").NetworkChunkPublisherUpdate;
+pub const AvailableActorIdentifiersPacket = @import("./packets/available-actor-identifiers.zig").AvailableActorIdentifiersPacket;
+pub const VoxelShapesPacket = @import("./packets/voxel-shapes.zig").VoxelShapesPacket;

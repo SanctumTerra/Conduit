@@ -149,6 +149,46 @@ pub fn handleResourcePack(
                     try network.sendPacket(connection, serialized);
                 }
 
+                // AvilableActorIdentifiersPacket
+                {
+                    var str = BinaryStream.init(network.allocator, null, null);
+                    defer str.deinit();
+
+                    var data = Protocol.NBT.CompoundTag.init(network.allocator, null);
+                    defer data.deinit(network.allocator);
+
+                    // TODO Add all entities
+                    const empty_list = try network.allocator.alloc(Protocol.NBT.Tag, 0);
+                    const name = try network.allocator.dupe(u8, "idlist");
+                    const idlist = Protocol.NBT.ListTag.init(empty_list, name);
+
+                    try data.value.put(network.allocator, "idlist", Protocol.NBT.Tag{ .List = idlist });
+
+                    var packet = Protocol.AvailableActorIdentifiersPacket{
+                        .data = data,
+                    };
+
+                    const serialized = try packet.serialize(&str);
+                    try network.sendPacket(player.connection, serialized);
+                }
+
+                // VoxelShapesPacket
+                {
+                    var str = BinaryStream.init(network.allocator, null, null);
+                    defer str.deinit();
+
+                    const empty_shapes = [_]Protocol.SerializableVoxelShape{};
+
+                    var packet = Protocol.VoxelShapesPacket{
+                        .shapes = &empty_shapes,
+                        .hashString = "",
+                        .registryHandle = 0,
+                    };
+
+                    const serialized = try packet.serialize(&str);
+                    try network.sendPacket(player.connection, serialized);
+                }
+
                 // PlayStatusPacket
                 {
                     var str = BinaryStream.init(network.allocator, null, null);
