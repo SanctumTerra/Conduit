@@ -4,6 +4,8 @@ const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 
+const Player = @import("../../player/player.zig").Player;
+
 pub fn handleSetLocalPlayerAsInitialized(
     network: *NetworkHandler,
     connection: *Raknet.Connection,
@@ -14,17 +16,21 @@ pub fn handleSetLocalPlayerAsInitialized(
     player.spawned = true;
     player.onSpawn();
 
+    var snapshot_buf: [64]?*Player = .{null} ** 64;
+    const snap_count = network.conduit.getPlayerSnapshots(&snapshot_buf);
+    const snapshots = snapshot_buf[0..snap_count];
+
     var all_entries = std.ArrayList(Protocol.PlayerListEntry){ .items = &.{}, .capacity = 0 };
     defer all_entries.deinit(network.allocator);
 
-    var it = network.conduit.players.valueIterator();
-    while (it.next()) |p| {
+    for (snapshots) |maybe_p| {
+        const p = maybe_p orelse continue;
         try all_entries.append(network.allocator, .{
-            .uuid = p.*.uuid,
-            .entityUniqueId = p.*.runtimeId,
-            .username = p.*.username,
-            .xuid = p.*.xuid,
-            .skin = &p.*.loginData.client_data,
+            .uuid = p.uuid,
+            .entityUniqueId = p.runtimeId,
+            .username = p.username,
+            .xuid = p.xuid,
+            .skin = &p.loginData.client_data,
         });
     }
 
@@ -53,11 +59,11 @@ pub fn handleSetLocalPlayerAsInitialized(
     };
     const new_serialized = try new_packet.serialize(&new_stream, network.allocator);
 
-    var ait = network.conduit.players.valueIterator();
-    while (ait.next()) |other| {
-        if (other.*.runtimeId == player.runtimeId) continue;
+    for (snapshots) |maybe_other| {
+        const other = maybe_other orelse continue;
+        if (other.runtimeId == player.runtimeId) continue;
 
-        try network.sendPacket(other.*.connection, new_serialized);
+        try network.sendPacket(other.connection, new_serialized);
 
         var add_stream = BinaryStream.init(network.allocator, null, null);
         defer add_stream.deinit();
@@ -70,17 +76,17 @@ pub fn handleSetLocalPlayerAsInitialized(
             .abilityEntityUniqueId = player.runtimeId,
         };
         const add_serialized = try add_packet.serialize(&add_stream);
-        try network.sendPacket(other.*.connection, add_serialized);
+        try network.sendPacket(other.connection, add_serialized);
 
         var other_stream = BinaryStream.init(network.allocator, null, null);
         defer other_stream.deinit();
         const other_packet = Protocol.AddPlayerPacket{
-            .uuid = other.*.uuid,
-            .username = other.*.username,
-            .entityRuntimeId = other.*.runtimeId,
-            .position = other.*.position,
+            .uuid = other.uuid,
+            .username = other.username,
+            .entityRuntimeId = other.runtimeId,
+            .position = other.position,
             .entityProperties = Protocol.PropertySyncData.init(network.allocator),
-            .abilityEntityUniqueId = other.*.runtimeId,
+            .abilityEntityUniqueId = other.runtimeId,
         };
         const other_serialized = try other_packet.serialize(&other_stream);
         try network.sendPacket(connection, other_serialized);

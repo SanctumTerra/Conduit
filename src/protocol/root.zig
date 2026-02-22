@@ -53,6 +53,7 @@ pub const SerializedSkin = @import("./types/serialized-skin.zig").SerializedSkin
 pub const AbilitySet = @import("./types/ability-set.zig").AbilitySet;
 pub const AbilityLayer = @import("./types/ability-layer.zig").AbilityLayer;
 pub const Rotation = @import("./types/rotation.zig").Rotation;
+pub const MoveDeltaFlags = @import("./types/move-delta-flags.zig").MoveDeltaFlags;
 
 pub const RequestNetworkSettingsPacket = @import("./packets/request-network-settings.zig").RequestNetworkSettings;
 pub const NetworkSettingsPacket = @import("./packets/network-settings.zig").NetworkSettings;
@@ -76,3 +77,4 @@ pub const PlayerAuthInputPacket = @import("./packets/player-auth-input.zig").Pla
 pub const PlayerListPacket = @import("./packets/player-list.zig").PlayerListPacket;
 pub const UpdateAbilitiesPacket = @import("./packets/update-abilities.zig").UpdateAbilitiesPacket;
 pub const AddPlayerPacket = @import("./packets/add-player.zig").AddPlayerPacket;
+pub const MoveActorDeltaPacket = @import("./packets/move-actor-delta.zig").MoveActorDeltaPacket;

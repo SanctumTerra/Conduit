@@ -23,6 +23,8 @@ pub const Player = struct {
     position: Protocol.Vector3f,
     rotation: Protocol.Vector2f,
     motion: Protocol.Vector2f,
+    // TODO Switch to Rotation struct once finished
+    head_yaw: f32,
 
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
@@ -50,11 +52,13 @@ pub const Player = struct {
             .position = Protocol.Vector3f.init(0, 0, 0),
             .rotation = Protocol.Vector2f.init(0, 0),
             .motion = Protocol.Vector2f.init(0, 0),
+            .head_yaw = 0.0,
         };
         player.flags = EntityActorFlags.init(&player);
 
         player.flags.setFlag(.HasGravity, true);
         player.flags.setFlag(.Breathing, true);
+        player.flags.setFlag(.AlwaysShowName, true);
         player.attributes.registerWithCurrent(.Movement, 0, 3.4028235e+38, 0.1, 0.1) catch {};
         player.attributes.registerWithCurrent(.UnderwaterMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};
         player.attributes.registerWithCurrent(.LavaMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};
@@ -69,10 +73,9 @@ pub const Player = struct {
     }
 
     pub fn disconnect(self: *Player) !void {
-        if (self.network.conduit.players.fetchRemove(self.runtimeId)) |entry| {
-            entry.value.deinit();
-            self.allocator.destroy(entry.value);
-        }
+        self.network.conduit.removePlayer(self);
+        self.deinit();
+        self.allocator.destroy(self);
     }
 
     pub fn onSpawn(self: *Player) void {

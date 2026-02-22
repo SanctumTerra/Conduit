@@ -16,6 +16,8 @@ pub const Conduit = struct {
     raknet: Raknet.Server,
     network: *NetworkHandler,
     players: std.AutoHashMap(i64, *Player),
+    connection_map: std.AutoHashMap(usize, *Player),
+    players_mutex: std.Thread.Mutex,
     worlds: std.StringHashMap(*World),
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
@@ -29,6 +31,8 @@ pub const Conduit = struct {
                 .allocator = allocator,
             }),
             .players = std.AutoHashMap(i64, *Player).init(allocator),
+            .connection_map = std.AutoHashMap(usize, *Player).init(allocator),
+            .players_mutex = std.Thread.Mutex{},
             .worlds = std.StringHashMap(*World).init(allocator),
             .network = undefined,
         };
@@ -59,11 +63,38 @@ pub const Conduit = struct {
     }
 
     pub fn getPlayerByConnection(self: *Conduit, connection: *Raknet.Connection) ?*Player {
+        self.players_mutex.lock();
+        defer self.players_mutex.unlock();
+        if (self.connection_map.count() == 0) return null;
+        return self.connection_map.get(@intFromPtr(connection));
+    }
+
+    pub fn addPlayer(self: *Conduit, player: *Player) !void {
+        self.players_mutex.lock();
+        defer self.players_mutex.unlock();
+        try self.players.put(player.runtimeId, player);
+        try self.connection_map.put(@intFromPtr(player.connection), player);
+    }
+
+    pub fn removePlayer(self: *Conduit, player: *Player) void {
+        self.players_mutex.lock();
+        defer self.players_mutex.unlock();
+        _ = self.players.remove(player.runtimeId);
+        _ = self.connection_map.remove(@intFromPtr(player.connection));
+    }
+
+    pub fn getPlayerSnapshots(self: *Conduit, buf: []?*Player) usize {
+        self.players_mutex.lock();
+        defer self.players_mutex.unlock();
+        if (self.players.count() == 0) return 0;
         var it = self.players.valueIterator();
-        while (it.next()) |player| {
-            if (player.*.connection == connection) return player.*;
+        var i: usize = 0;
+        while (it.next()) |p| {
+            if (i >= buf.len) break;
+            buf[i] = p.*;
+            i += 1;
         }
-        return null;
+        return i;
     }
 
     pub fn createWorld(self: *Conduit, identifier: []const u8) !*World {
@@ -88,6 +119,7 @@ pub const Conduit = struct {
             self.allocator.destroy(player.*);
         }
         self.players.deinit();
+        self.connection_map.deinit();
 
         var worlds_it = self.worlds.valueIterator();
         while (worlds_it.next()) |world| {

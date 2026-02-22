@@ -32,9 +32,11 @@ pub fn handleTextPacket(
 
         const serialized = try packet.serialize(&str);
 
-        var it = network.conduit.players.valueIterator();
-        while (it.next()) |player| {
-            try network.sendPacket(player.*.connection, serialized);
+        var snapshot_buf: [64]?*@import("../../player/player.zig").Player = .{null} ** 64;
+        const count = network.conduit.getPlayerSnapshots(&snapshot_buf);
+        for (snapshot_buf[0..count]) |maybe_player| {
+            const p = maybe_player orelse continue;
+            try network.sendPacket(p.connection, serialized);
         }
     }
 }

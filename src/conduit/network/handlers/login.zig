@@ -81,7 +81,7 @@ pub fn handleLogin(
         return;
     }
 
-    try network.conduit.players.put(network.lastRuntimeId, player);
+    try network.conduit.addPlayer(player);
     Raknet.Logger.INFO("Player {s} xuid: {s} logged in.", .{ data.identity_data.display_name, data.identity_data.xuid });
 
     {
