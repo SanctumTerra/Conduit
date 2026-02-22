@@ -5,6 +5,7 @@ const NetworkHandler = @import("./network/root.zig").NetworkHandler;
 const Player = @import("./player/player.zig").Player;
 const World = @import("./world/world.zig").World;
 const Generator = @import("./world/generator/root.zig");
+const ServerProperties = @import("./config.zig").ServerProperties;
 
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
@@ -12,6 +13,7 @@ const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
+    config: ServerProperties,
     events: Events.Events,
     raknet: Raknet.Server,
     network: *NetworkHandler,
@@ -22,12 +24,14 @@ pub const Conduit = struct {
     worlds: std.StringHashMap(*World),
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
+        const config = try ServerProperties.load(allocator, "server.properties");
         return Conduit{
             .allocator = allocator,
+            .config = config,
             .events = Events.Events.init(allocator),
             .raknet = try Raknet.Server.init(.{
-                .address = "0.0.0.0",
-                .port = 19132,
+                .address = config.address,
+                .port = config.port,
                 .tick_rate = 50,
                 .allocator = allocator,
             }),
@@ -110,10 +114,10 @@ pub const Conduit = struct {
     }
 
     pub fn deinit(self: *Conduit) void {
-        // Deinit raknet first so we dont receive any more packets
         self.raknet.deinit();
 
         deinitRegistries();
+        self.config.deinit();
 
         var it = self.players.valueIterator();
         while (it.next()) |player| {
