@@ -9,22 +9,36 @@ pub fn handleMobEquipment(
     connection: *Raknet.Connection,
     stream: *BinaryStream,
 ) !void {
-    var packet = try Protocol.MobEquipmentPacket.deserialize(stream);
-    defer packet.deinit(stream.allocator);
+    _ = try stream.readVarInt();
+    _ = try stream.readVarLong();
+    Protocol.NetworkItemStackDescriptor.skip(stream) catch {};
+    const slot = try stream.readUint8();
+    const selected_slot = try stream.readUint8();
+    _ = try stream.readInt8();
+
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
 
-    if (player.entity.getTraitState(inventory.InventoryTrait)) |state| {
-        inventory.setHeldItem(state, &player.entity, packet.selected_slot);
-    }
+    const state = player.entity.getTraitState(inventory.InventoryTrait) orelse return;
+    inventory.setHeldItem(state, &player.entity, selected_slot);
+
+    const held = inventory.getHeldItem(state);
+    const item_descriptor = if (held) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{
+        .network = 0,
+        .stackSize = null,
+        .metadata = null,
+        .itemStackId = null,
+        .networkBlockId = null,
+        .extras = null,
+    };
 
     var out_stream = BinaryStream.init(network.allocator, null, null);
     defer out_stream.deinit();
 
     const out_packet = Protocol.MobEquipmentPacket{
         .runtime_entity_id = @intCast(player.entity.runtime_id),
-        .item = packet.item,
-        .slot = packet.selected_slot,
-        .selected_slot = packet.selected_slot,
+        .item = item_descriptor,
+        .slot = slot,
+        .selected_slot = selected_slot,
         .container_id = .Inventory,
     };
     const serialized = try out_packet.serialize(&out_stream);

@@ -21,6 +21,8 @@ const handleInteract = @import("./handlers/interact.zig").handleInteract;
 const handleMobEquipment = @import("./handlers/mob-equipment.zig").handleMobEquipment;
 const handlePacketViolationWarning = @import("./handlers/packet-violation-warning.zig").handlePacketViolationWarning;
 const handleContainerClose = @import("./handlers/container-close.zig").handleContainerClose;
+const handleInventoryTransaction = @import("./handlers/inventory-transaction.zig").handleInventoryTransaction;
+const handleItemStackRequest = @import("./handlers/item-stack-request.zig").handleItemStackRequest;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
@@ -161,6 +163,20 @@ pub const NetworkHandler = struct {
                     &stream,
                 ) catch |err| {
                     Raknet.Logger.ERROR("ContainerClose error: {any}", .{err});
+                },
+                Packet.InventoryTransaction => handleInventoryTransaction(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("InventoryTransaction error: {any}", .{err});
+                },
+                Packet.ItemStackRequest => handleItemStackRequest(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("ItemStackRequest error: {any}", .{err});
                 },
                 Packet.PacketViolationWarning => handlePacketViolationWarning(
                     self,

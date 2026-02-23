@@ -13,6 +13,7 @@ const Container = @import("../container/container.zig").Container;
 const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
 const ChunkLoadingTrait = @import("../entity/traits/chunk-loading.zig").ChunkLoadingTrait;
+const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
 const Display = @import("../items/traits/display.zig");
 const DisplayTrait = Display.DisplayTrait;
 
@@ -77,6 +78,11 @@ pub const Player = struct {
             .initialized = false,
         });
         try self.entity.addTrait(chunk_loading);
+
+        const cursor_trait = try CursorTrait.create(allocator, .{
+            .container = undefined,
+        });
+        try self.entity.addTrait(cursor_trait);
     }
 
     pub fn deinit(self: *Player) void {

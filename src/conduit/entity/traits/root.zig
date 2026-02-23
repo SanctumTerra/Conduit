@@ -9,3 +9,5 @@ pub const stats = @import("./stats.zig");
 pub const StatsTrait = stats.StatsTrait;
 pub const chunk_loading = @import("./chunk-loading.zig");
 pub const ChunkLoadingTrait = chunk_loading.ChunkLoadingTrait;
+pub const cursor = @import("./cursor.zig");
+pub const CursorTrait = cursor.CursorTrait;
