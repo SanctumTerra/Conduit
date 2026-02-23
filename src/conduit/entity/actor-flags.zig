@@ -5,16 +5,12 @@ const Protocol = @import("protocol");
 const ActorFlags = Protocol.ActorFlags;
 const ActorDataId = Protocol.ActorDataId;
 
-const Player = @import("../player/player.zig").Player;
-
 pub const EntityActorFlags = struct {
-    player: *Player,
     flags_one: i64,
     flags_two: i64,
 
-    pub fn init(player: *Player) EntityActorFlags {
+    pub fn init() EntityActorFlags {
         return .{
-            .player = player,
             .flags_one = 0,
             .flags_two = 0,
         };
@@ -36,7 +32,6 @@ pub const EntityActorFlags = struct {
 
     pub fn setFlags(self: *EntityActorFlags, flags: []const struct { flag: ActorFlags, value: bool }) void {
         for (flags) |item| {
-            // TODO REMOVE AFTER DEBUG
             std.log.info("[EntityActorFlags] setFlag {s} = {}", .{ @tagName(item.flag), item.value });
             self.setFlagRaw(item.flag, item.value);
         }
