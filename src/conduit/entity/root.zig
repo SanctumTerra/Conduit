@@ -1,11 +1,14 @@
-pub const EntityActorFlags = @import("./actor-flags.zig").EntityActorFlags;
-pub const Attributes = @import("./attributes.zig").Attributes;
 pub const Entity = @import("./entity.zig").Entity;
 pub const EntityType = @import("./entity-type.zig").EntityType;
-pub const EntityTrait = @import("./trait.zig").EntityTrait;
-pub const EntityTraitInstance = @import("./trait.zig").EntityTraitInstance;
-pub const EntityTraitVTable = @import("./trait.zig").EntityTraitVTable;
-pub const Event = @import("./trait.zig").Event;
-pub const EntityComponent = @import("./component.zig").EntityComponent;
-pub const ComponentMap = @import("./component.zig").ComponentMap;
+
+pub const metadata = @import("./metadata/root.zig");
+pub const EntityActorFlags = metadata.EntityActorFlags;
+pub const Attributes = metadata.Attributes;
+pub const EntityComponent = metadata.EntityComponent;
+pub const ComponentMap = metadata.ComponentMap;
+
 pub const traits = @import("./traits/root.zig");
+pub const EntityTrait = traits.EntityTrait;
+pub const EntityTraitInstance = traits.EntityTraitInstance;
+pub const EntityTraitVTable = traits.EntityTraitVTable;
+pub const Event = traits.Event;

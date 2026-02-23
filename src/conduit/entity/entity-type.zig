@@ -1,5 +1,5 @@
 const std = @import("std");
-const ComponentMap = @import("./component.zig").ComponentMap;
+const ComponentMap = @import("./metadata/component.zig").ComponentMap;
 
 pub const EntityType = struct {
     identifier: []const u8,

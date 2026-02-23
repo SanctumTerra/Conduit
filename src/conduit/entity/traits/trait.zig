@@ -1,8 +1,8 @@
 const std = @import("std");
-const Entity = @import("./entity.zig").Entity;
-const EntityType = @import("./entity-type.zig").EntityType;
-const Player = @import("../player/player.zig").Player;
-const Container = @import("../container/container.zig").Container;
+const Entity = @import("../entity.zig").Entity;
+const EntityType = @import("../entity-type.zig").EntityType;
+const Player = @import("../../player/player.zig").Player;
+const Container = @import("../../container/container.zig").Container;
 const CompoundTag = @import("nbt").CompoundTag;
 
 pub const Event = enum {
