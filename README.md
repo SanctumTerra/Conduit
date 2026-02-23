@@ -16,13 +16,13 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [x] Terrain Generators
 - [x] Player Actor Flags and Abilities
 - [x] MultiPlayer
-- [ ] Item System
-- [ ] Containers
-- [ ] Inventory System
-- [ ] Item Trait System
+- [x] Item System
+- [x] Containers
+- [ ] Inventory System (WIP)
+- [ ] Item Trait System (WIP)
 - [ ] Block Placement & Breaking
 - [ ] Block Drops
-- [ ] Entity System
+- [ ] Entity System (WIP)
 - [ ] Entity Drops
 - [ ] Plugin API
 - [ ] Command System
