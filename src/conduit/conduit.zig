@@ -7,12 +7,14 @@ const Player = @import("./player/player.zig").Player;
 const World = @import("./world/world.zig").World;
 const Generator = @import("./world/generator/root.zig");
 const ServerProperties = @import("./config.zig").ServerProperties;
+const EntityType = @import("./entity/entity-type.zig").EntityType;
 
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 
 const ItemPalette = @import("./items/item-palette.zig");
+const CreativeContentLoader = @import("./items/creative-content-loader.zig");
 
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
@@ -25,6 +27,8 @@ pub const Conduit = struct {
     players_mutex: std.Thread.Mutex,
     snapshot_buf: std.ArrayList(*Player),
     worlds: std.StringHashMap(*World),
+    player_entity_type: EntityType,
+    creative_content: ?CreativeContentLoader.CreativeContentData,
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
         const config = try ServerProperties.load(allocator, "server.properties");
@@ -54,6 +58,8 @@ pub const Conduit = struct {
             .players_mutex = std.Thread.Mutex{},
             .snapshot_buf = std.ArrayList(*Player){ .items = &.{}, .capacity = 0 },
             .worlds = std.StringHashMap(*World).init(allocator),
+            .player_entity_type = EntityType.init(allocator, "minecraft:player", 1, &.{}),
+            .creative_content = null,
             .network = undefined,
         };
     }
@@ -66,6 +72,14 @@ pub const Conduit = struct {
         try ItemPalette.initRegistry(self.allocator);
         const item_count = try ItemPalette.loadItemTypes(self.allocator);
         Raknet.Logger.INFO("Loaded {d} item types", .{item_count});
+
+        self.creative_content = CreativeContentLoader.loadCreativeContent(self.allocator) catch |err| blk: {
+            Raknet.Logger.ERROR("Failed to load creative content: {any}", .{err});
+            break :blk null;
+        };
+        if (self.creative_content) |cc| {
+            Raknet.Logger.INFO("Loaded {d} creative groups and {d} creative items", .{ cc.group_count, cc.item_count });
+        }
 
         const props = Generator.GeneratorProperties.init(null, .Overworld);
         const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
@@ -96,7 +110,7 @@ pub const Conduit = struct {
     pub fn addPlayer(self: *Conduit, player: *Player) !void {
         self.players_mutex.lock();
         defer self.players_mutex.unlock();
-        try self.players.put(player.runtimeId, player);
+        try self.players.put(player.entity.runtime_id, player);
         try self.connection_map.put(@intFromPtr(player.connection), player);
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
@@ -104,7 +118,7 @@ pub const Conduit = struct {
     pub fn removePlayer(self: *Conduit, player: *Player) void {
         self.players_mutex.lock();
         defer self.players_mutex.unlock();
-        _ = self.players.remove(player.runtimeId);
+        _ = self.players.remove(player.entity.runtime_id);
         _ = self.connection_map.remove(@intFromPtr(player.connection));
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
@@ -138,6 +152,7 @@ pub const Conduit = struct {
 
         deinitRegistries();
         ItemPalette.deinitRegistry();
+        if (self.creative_content) |*cc| cc.deinit();
         self.config.deinit();
 
         var it = self.players.valueIterator();
