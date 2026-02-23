@@ -11,6 +11,8 @@ const ItemStack = @import("../items/item-stack.zig").ItemStack;
 const Container = @import("../container/container.zig").Container;
 
 const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
+const Display = @import("../items/traits/display.zig");
+const DisplayTrait = Display.DisplayTrait;
 
 pub const Player = struct {
     entity: Entity,
@@ -84,10 +86,15 @@ pub const Player = struct {
         if (self.entity.getTraitState(InventoryTrait)) |state| {
             var s: *InventoryTrait.TraitState = state;
 
-            const item = ItemStack.fromIdentifier(
+            var item = ItemStack.fromIdentifier(
+                self.entity.allocator,
                 "minecraft:diamond_shovel",
                 .{},
             ) orelse return;
+
+            const display = try DisplayTrait.create(self.entity.allocator, .{});
+            try item.addTrait(display);
+            try Display.setDisplayName(&item, "§rA very cool §7shovel");
 
             s.container.setItem(0, item);
             s.container.update();

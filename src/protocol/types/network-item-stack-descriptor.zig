@@ -27,10 +27,15 @@ pub const NetworkItemStackDescriptor = struct {
         const networkBlockId = try stream.readZigZag();
 
         const length = try stream.readVarInt();
-        const extras: ?ItemInstanceUserData = if (length > 0)
-            try ItemInstanceUserData.read(stream, allocator, network)
-        else
-            null;
+        const extras: ?ItemInstanceUserData = if (length > 0) blk: {
+            const start = stream.offset;
+            const result = ItemInstanceUserData.read(stream, allocator, network) catch {
+                stream.offset = start + length;
+                break :blk null;
+            };
+            stream.offset = start + length;
+            break :blk result;
+        } else null;
 
         return .{
             .network = network,

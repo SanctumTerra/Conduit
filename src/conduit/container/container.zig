@@ -27,7 +27,7 @@ pub const Container = struct {
 
     pub fn deinit(self: *Container) void {
         for (self.storage) |*slot| {
-            if (slot.*) |*item| item.deinit(self.allocator);
+            if (slot.*) |*item| item.deinit();
         }
         self.allocator.free(self.storage);
         self.occupants.deinit();
@@ -72,7 +72,7 @@ pub const Container = struct {
 
     pub fn setItem(self: *Container, slot: u32, item: ItemStack) void {
         const idx = slot % self.getSize();
-        if (self.storage[idx]) |*old| old.deinit(self.allocator);
+        if (self.storage[idx]) |*old| old.deinit();
         self.storage[idx] = item;
 
         if (item.stackSize == 0 or std.mem.eql(u8, item.item_type.identifier, "minecraft:air")) {
@@ -84,14 +84,14 @@ pub const Container = struct {
 
     pub fn clearSlot(self: *Container, slot: u32) void {
         const idx = slot % self.getSize();
-        if (self.storage[idx]) |*item| item.deinit(self.allocator);
+        if (self.storage[idx]) |*item| item.deinit();
         self.storage[idx] = null;
         self.updateSlot(idx);
     }
 
     pub fn clear(self: *Container) void {
         for (self.storage) |*slot| {
-            if (slot.*) |*item| item.deinit(self.allocator);
+            if (slot.*) |*item| item.deinit();
             slot.* = null;
         }
         if (self.occupants.count() > 0) self.update();
@@ -131,7 +131,7 @@ pub const Container = struct {
             self.storage[idx] = null;
         }
         self.updateSlot(idx);
-        return ItemStack.init(item.item_type, .{ .stackSize = removed, .metadata = item.metadata, .nbt = item.nbt });
+        return ItemStack.init(self.allocator, item.item_type, .{ .stackSize = removed, .metadata = item.metadata, .nbt = item.nbt });
     }
 
     pub fn takeItem(self: *Container, slot: u32, amount: u16) ?ItemStack {
@@ -144,7 +144,7 @@ pub const Container = struct {
         }
         self.storage[idx].?.stackSize -= amount;
         self.updateSlot(idx);
-        return ItemStack.init(item.item_type, .{ .stackSize = amount, .metadata = item.metadata, .nbt = item.nbt });
+        return ItemStack.init(self.allocator, item.item_type, .{ .stackSize = amount, .metadata = item.metadata, .nbt = item.nbt });
     }
 
     pub fn swapItems(self: *Container, slot: u32, other_slot: u32, other_container: ?*Container) void {

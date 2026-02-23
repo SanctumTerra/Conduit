@@ -1,5 +1,6 @@
 const std = @import("std");
 const NBT = @import("nbt");
+const ItemComponentMap = @import("./component.zig").ItemComponentMap;
 
 pub const ItemType = struct {
     identifier: []const u8,
@@ -10,6 +11,7 @@ pub const ItemType = struct {
     is_component_based: bool,
     version: i32,
     properties: NBT.Tag,
+    components: ItemComponentMap,
 
     allocator: std.mem.Allocator,
 
@@ -58,6 +60,7 @@ pub const ItemType = struct {
             .is_component_based = is_component_based,
             .version = version,
             .properties = properties,
+            .components = ItemComponentMap.init(allocator),
             .allocator = allocator,
         };
         return item;
@@ -69,6 +72,7 @@ pub const ItemType = struct {
             self.allocator.free(tag);
         }
         self.allocator.free(self.tags);
+        self.components.deinit();
         self.properties.deinit(self.allocator);
         self.allocator.destroy(self);
     }
@@ -95,6 +99,10 @@ pub const ItemType = struct {
             if (std.mem.eql(u8, t, tag)) return true;
         }
         return false;
+    }
+
+    pub fn hasComponent(self: *const ItemType, identifier: []const u8) bool {
+        return self.components.contains(identifier);
     }
 
     pub fn isTool(self: *const ItemType) bool {
