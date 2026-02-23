@@ -12,20 +12,19 @@ pub fn handlePlayerAuthInput(
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
     const packet = try Protocol.PlayerAuthInputPacket.deserialize(stream);
 
-    player.position = packet.position;
-    player.rotation = packet.rotation;
-    player.motion = packet.motion;
-    player.head_yaw = packet.headYaw;
+    player.entity.position = packet.position;
+    player.entity.rotation = packet.rotation;
+    player.entity.motion = .{ .x = packet.motion.x, .y = 0, .z = packet.motion.y };
+    player.entity.head_yaw = packet.headYaw;
 
-    // Flags
     {
         var flags_changed = false;
         if (packet.inputData.hasFlag(.StartSneaking)) {
-            player.flags.setFlag(.Sneaking, true);
+            player.entity.flags.setFlag(.Sneaking, true);
             flags_changed = true;
         }
         if (packet.inputData.hasFlag(.StopSneaking)) {
-            player.flags.setFlag(.Sneaking, false);
+            player.entity.flags.setFlag(.Sneaking, false);
             flags_changed = true;
         }
         if (flags_changed) try player.broadcastActorFlags();
@@ -35,7 +34,7 @@ pub fn handlePlayerAuthInput(
     defer move_stream.deinit();
 
     const move_packet = Protocol.MoveActorDeltaPacket{
-        .runtime_id = @intCast(player.runtimeId),
+        .runtime_id = @intCast(player.entity.runtime_id),
         .flags = MoveDeltaFlags.All,
         .x = packet.position.x,
         .y = packet.position.y,
@@ -48,7 +47,7 @@ pub fn handlePlayerAuthInput(
 
     const snapshots = network.conduit.getPlayerSnapshots();
     for (snapshots) |other| {
-        if (other.runtimeId == player.runtimeId) continue;
+        if (other.entity.runtime_id == player.entity.runtime_id) continue;
         if (!other.spawned) continue;
         try network.sendPacket(other.connection, serialized);
     }

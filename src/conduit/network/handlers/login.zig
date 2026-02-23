@@ -71,12 +71,14 @@ pub fn handleLogin(
     network.lastRuntimeId += 1;
 
     const player = try network.allocator.create(Player);
-    player.* = try Player.init(
+    errdefer network.allocator.destroy(player);
+    try player.init(
         network.allocator,
         connection,
         network,
         data,
         network.lastRuntimeId,
+        &network.conduit.player_entity_type,
     );
 
     var event = Events.types.PlayerJoinEvent{

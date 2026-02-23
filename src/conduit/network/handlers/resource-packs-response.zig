@@ -47,8 +47,8 @@ pub fn handleResourcePack(
                     var str = BinaryStream.init(network.allocator, null, null);
                     defer str.deinit();
 
-                    const entity_id: i64 = player.runtimeId;
-                    const runtime_entity_id: u64 = @bitCast(player.runtimeId);
+                    const entity_id: i64 = player.entity.runtime_id;
+                    const runtime_entity_id: u64 = @bitCast(player.entity.runtime_id);
 
                     const properties = Protocol.NBT.Tag{ .Compound = Protocol.NBT.CompoundTag.init(network.allocator, null) };
 
@@ -148,7 +148,7 @@ pub fn handleResourcePack(
                     try network.sendPacket(connection, serialized);
                 }
 
-                // AvilableActorIdentifiersPacket
+                // AvailableActorIdentifiersPacket
                 {
                     var str = BinaryStream.init(network.allocator, null, null);
                     defer str.deinit();
@@ -156,10 +156,16 @@ pub fn handleResourcePack(
                     var data = Protocol.NBT.CompoundTag.init(network.allocator, null);
                     defer data.deinit(network.allocator);
 
-                    // TODO Add all entities
-                    const empty_list = try network.allocator.alloc(Protocol.NBT.Tag, 0);
-                    const name = try network.allocator.dupe(u8, "idlist");
-                    const idlist = Protocol.NBT.ListTag.init(empty_list, name);
+                    var player_entry = Protocol.NBT.CompoundTag.init(network.allocator, null);
+                    const id_name = try network.allocator.dupe(u8, "id");
+                    const id_value = try network.allocator.dupe(u8, "minecraft:player");
+                    try player_entry.value.put(network.allocator, "id", Protocol.NBT.Tag{ .String = Protocol.NBT.StringTag.init(id_value, id_name) });
+
+                    const entries = try network.allocator.alloc(Protocol.NBT.Tag, 1);
+                    entries[0] = Protocol.NBT.Tag{ .Compound = player_entry };
+
+                    const list_name = try network.allocator.dupe(u8, "idlist");
+                    const idlist = Protocol.NBT.ListTag.init(entries, list_name);
 
                     try data.value.put(network.allocator, "idlist", Protocol.NBT.Tag{ .List = idlist });
 
@@ -185,6 +191,13 @@ pub fn handleResourcePack(
                     try network.sendPacket(player.connection, serialized);
                 }
 
+                // CreativeContentPacket
+                {
+                    if (network.conduit.creative_content) |cc| {
+                        try network.sendPacket(player.connection, cc.serialized);
+                    }
+                }
+
                 // VoxelShapesPacket
                 {
                     var str = BinaryStream.init(network.allocator, null, null);
@@ -207,8 +220,8 @@ pub fn handleResourcePack(
                     var str = BinaryStream.init(network.allocator, null, null);
                     defer str.deinit();
 
-                    const data = try player.flags.buildDataItems(network.allocator);
-                    var packet = Protocol.SetActorDataPacket.init(network.allocator, player.runtimeId, 0, data);
+                    const data = try player.entity.flags.buildDataItems(network.allocator);
+                    var packet = Protocol.SetActorDataPacket.init(network.allocator, player.entity.runtime_id, 0, data);
                     defer packet.deinit();
 
                     const serialized = try packet.serialize(&str);
@@ -219,11 +232,11 @@ pub fn handleResourcePack(
                     var str = BinaryStream.init(network.allocator, null, null);
                     defer str.deinit();
 
-                    var attrs = try player.attributes.collectAll(network.allocator);
+                    var attrs = try player.entity.attributes.collectAll(network.allocator);
                     defer attrs.deinit(network.allocator);
 
                     var packet = Protocol.UpdateAttributesPacket{
-                        .runtime_actor_id = player.runtimeId,
+                        .runtime_actor_id = player.entity.runtime_id,
                         .attributes = attrs,
                         .tick = 0,
                     };
