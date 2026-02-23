@@ -39,12 +39,22 @@ pub const NetworkHandler = struct {
             },
         };
         self.conduit.*.raknet.setConnectCallback(onConnect, self);
+        self.conduit.*.raknet.setDisconnectCallback(onDisconnect, self);
         return self;
     }
 
     pub fn onConnect(connection: *Raknet.Connection, context: ?*anyopaque) void {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
         connection.setGamePacketCallback(onPacket, self);
+    }
+
+    pub fn onDisconnect(connection: *Raknet.Connection, context: ?*anyopaque) void {
+        const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
+        const player = self.conduit.getPlayerByConnection(connection) orelse return;
+        Raknet.Logger.INFO("Player {s} has disconnected.", .{player.username});
+        player.disconnect() catch |err| {
+            Raknet.Logger.ERROR("Failed to disconnect player: {any}", .{err});
+        };
     }
 
     pub fn onPacket(conn: *Raknet.Connection, payload: []const u8, context: ?*anyopaque) void {
