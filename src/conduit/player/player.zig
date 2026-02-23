@@ -7,6 +7,7 @@ pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHand
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
 const EntityActorFlags = @import("../entity/root.zig").EntityActorFlags;
 const Attributes = @import("../entity/root.zig").Attributes;
+const ItemStack = @import("../items/item-stack.zig").ItemStack;
 
 pub const Player = struct {
     allocator: std.mem.Allocator,
@@ -79,11 +80,39 @@ pub const Player = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn onSpawn(self: *Player) void {
+    pub fn onSpawn(self: *Player) !void {
         self.sendSpawnChunks() catch |err| {
             Raknet.Logger.ERROR("Failed to send spawn chunks for {s}: {any}", .{ self.username, err });
         };
         Raknet.Logger.INFO("Player {s} has spawned.", .{self.username});
+
+        var item = ItemStack.fromIdentifier("minecraft:diamond_shovel", .{}) orelse return;
+        defer item.deinit(self.allocator);
+
+        {
+            var str = BinaryStream.init(self.allocator, null, null);
+            defer str.deinit();
+
+            const packet = Protocol.InventorySlotPacket{
+                .containerId = .Inventory,
+                .fullContainerName = .{
+                    .identifier = .Inventory,
+                    .dynamicIdentifier = 0,
+                },
+                .item = item.toNetworkStack(),
+                .storageItem = .{
+                    .network = 0,
+                    .extras = null,
+                    .itemStackId = null,
+                    .metadata = null,
+                    .networkBlockId = null,
+                    .stackSize = null,
+                },
+                .slot = 0,
+            };
+            const serialized = try packet.serialize(&str);
+            try self.network.sendPacket(self.connection, serialized);
+        }
     }
 
     pub fn broadcastActorFlags(self: *Player) !void {

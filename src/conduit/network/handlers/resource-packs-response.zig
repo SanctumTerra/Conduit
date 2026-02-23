@@ -171,6 +171,20 @@ pub fn handleResourcePack(
                     try network.sendPacket(player.connection, serialized);
                 }
 
+                // ItemRegistryPacket
+                {
+                    var str = BinaryStream.init(network.allocator, null, null);
+                    defer str.deinit();
+
+                    const ItemPalette = @import("../../items/item-palette.zig");
+                    const entries = try ItemPalette.getItemRegistry(network.allocator);
+                    defer network.allocator.free(entries);
+
+                    const packet = Protocol.ItemRegistryPacket{ .entries = entries };
+                    const serialized = try packet.serialize(&str);
+                    try network.sendPacket(player.connection, serialized);
+                }
+
                 // VoxelShapesPacket
                 {
                     var str = BinaryStream.init(network.allocator, null, null);

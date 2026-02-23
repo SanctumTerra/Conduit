@@ -1,4 +1,6 @@
 pub const PROTOCOL = 924;
+pub const SHIELD_NETWORK_ID = 387;
+
 pub const Login = @import("./login/root.zig");
 pub const Data = @import("./data/root.zig");
 pub const NBT = @import("nbt");
@@ -25,6 +27,9 @@ pub const PlayerActionType = @import("./enums/player-action-type.zig").PlayerAct
 pub const PlayerListAction = @import("./enums/player-list-action.zig").PlayerListAction;
 pub const AbilityIndex = @import("./enums/ability-index.zig").AbilityIndex;
 pub const AbilityLayerType = @import("./enums/ability-layer-type.zig").AbilityLayerType;
+pub const ContainerName = @import("./enums/container-name.zig").ContainerName;
+pub const ContainerId = @import("./enums/container-id.zig").ContainerId;
+pub const CreativeItemCategory = @import("./enums/creative-item-category.zig").CreativeItemCategory;
 
 pub const Experiments = @import("./types/experiments.zig").Experiments;
 pub const ResourceIdVersions = @import("./types/resource-id-versions.zig").ResourceIdVersions;
@@ -53,6 +58,12 @@ pub const SerializedSkin = @import("./types/serialized-skin.zig").SerializedSkin
 pub const AbilitySet = @import("./types/ability-set.zig").AbilitySet;
 pub const AbilityLayer = @import("./types/ability-layer.zig").AbilityLayer;
 pub const Rotation = @import("./types/rotation.zig").Rotation;
+pub const FullContainerName = @import("./types/full-container-name.zig").FullContainerName;
+pub const ItemInstanceUserData = @import("./types/item-instance-user-data.zig").ItemInstanceUserData;
+pub const NetworkItemStackDescriptor = @import("./types/network-item-stack-descriptor.zig").NetworkItemStackDescriptor;
+pub const NetworkItemInstanceDescriptor = @import("./types/network-item-instance-descriptor.zig").NetworkItemInstanceDescriptor;
+pub const CreativeGroup = @import("./types/creative-group.zig").CreativeGroup;
+pub const CreativeItem = @import("./types/creative-item.zig").CreativeItem;
 pub const MoveDeltaFlags = @import("./types/move-delta-flags.zig").MoveDeltaFlags;
 
 pub const RequestNetworkSettingsPacket = @import("./packets/request-network-settings.zig").RequestNetworkSettings;
@@ -81,3 +92,7 @@ pub const MoveActorDeltaPacket = @import("./packets/move-actor-delta.zig").MoveA
 pub const ClientCacheStatusPacket = @import("./packets/client-cache-status.zig").ClientCacheStatus;
 pub const AnimatePacket = @import("./packets/animate.zig").AnimatePacket;
 pub const PlayerSkinPacket = @import("./packets/player-skin.zig").PlayerSkinPacket;
+pub const InventorySlotPacket = @import("./packets/inventory-slot.zig").InventorySlotPacket;
+pub const CreativeContentPacket = @import("./packets/creative-content.zig").CreativeContentPacket;
+pub const ItemRegistryPacket = @import("./packets/item-registry.zig").ItemRegistryPacket;
+pub const ItemRegistryEntry = @import("./packets/item-registry.zig").ItemRegistryEntry;

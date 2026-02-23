@@ -12,6 +12,8 @@ const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermuta
 const initRegistries = @import("./world/block/root.zig").initRegistries;
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 
+const ItemPalette = @import("./items/item-palette.zig");
+
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
     config: ServerProperties,
@@ -60,6 +62,10 @@ pub const Conduit = struct {
         try initRegistries(self.allocator);
         const count = try loadBlockPermutations(self.allocator);
         Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
+
+        try ItemPalette.initRegistry(self.allocator);
+        const item_count = try ItemPalette.loadItemTypes(self.allocator);
+        Raknet.Logger.INFO("Loaded {d} item types", .{item_count});
 
         const props = Generator.GeneratorProperties.init(null, .Overworld);
         const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
@@ -131,6 +137,7 @@ pub const Conduit = struct {
         self.raknet.deinit();
 
         deinitRegistries();
+        ItemPalette.deinitRegistry();
         self.config.deinit();
 
         var it = self.players.valueIterator();

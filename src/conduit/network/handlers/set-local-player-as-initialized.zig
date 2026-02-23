@@ -14,7 +14,7 @@ pub fn handleSetLocalPlayerAsInitialized(
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
     if (player.spawned) return;
     player.spawned = true;
-    player.onSpawn();
+    try player.onSpawn();
 
     const snapshots = network.conduit.getPlayerSnapshots();
 
