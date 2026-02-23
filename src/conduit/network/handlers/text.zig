@@ -20,6 +20,11 @@ pub fn handleTextPacket(
             return;
         }
 
+        if (std.mem.startsWith(u8, text.message, "spawn ")) {
+            try spawnEntityCommand(network, sender, text.message[6..]);
+            return;
+        }
+
         var event = Events.types.PlayerChatEvent{
             .player = sender,
             .message = text.message,
@@ -46,6 +51,7 @@ pub fn handleTextPacket(
 }
 
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
+const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig");
 const Task = @import("../../tasks.zig").Task;
 
 const ChunkGenState = struct {
@@ -131,4 +137,40 @@ fn sendChat(network: *NetworkHandler, player: anytype, message: []const u8) void
     };
     const serialized = packet.serialize(&str) catch return;
     network.sendPacket(player.connection, serialized) catch {};
+}
+
+fn spawnEntityCommand(network: *NetworkHandler, sender: anytype, name: []const u8) !void {
+    const trimmed = std.mem.trim(u8, name, " ");
+    if (trimmed.len == 0) {
+        sendChat(network, sender, "§cUsage: spawn <entity_type>");
+        return;
+    }
+
+    var identifier_buf: [128]u8 = undefined;
+    const identifier = if (std.mem.indexOf(u8, trimmed, ":") != null)
+        trimmed
+    else blk: {
+        const written = std.fmt.bufPrint(&identifier_buf, "minecraft:{s}", .{trimmed}) catch {
+            sendChat(network, sender, "§cEntity name too long");
+            return;
+        };
+        break :blk written;
+    };
+
+    const entity_type = EntityTypeRegistry.EntityTypeRegistry.get(identifier) orelse {
+        sendChat(network, sender, "§cUnknown entity type");
+        return;
+    };
+
+    const world = network.conduit.getWorld("world") orelse return;
+    const dimension = world.getDimension("overworld") orelse return;
+
+    const pos = sender.entity.position;
+    const spawn_pos = Protocol.Vector3f.init(pos.x + 2, pos.y, pos.z);
+
+    _ = try dimension.spawnEntity(entity_type, spawn_pos);
+
+    var msg_buf: [128]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "§aSpawned {s}", .{identifier}) catch return;
+    sendChat(network, sender, msg);
 }

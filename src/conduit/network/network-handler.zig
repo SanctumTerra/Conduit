@@ -28,7 +28,6 @@ pub const NetworkHandler = struct {
     conduit: *Conduit,
     allocator: std.mem.Allocator,
     options: CompressionOptions,
-    lastRuntimeId: i64 = 0,
 
     pub fn init(c: *Conduit) !*NetworkHandler {
         const self = try c.allocator.create(NetworkHandler);

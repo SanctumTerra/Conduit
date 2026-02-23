@@ -1,5 +1,6 @@
 pub const Entity = @import("./entity.zig").Entity;
 pub const EntityType = @import("./entity-type.zig").EntityType;
+pub const EntityTypeRegistry = @import("./entity-type-registry.zig");
 
 pub const metadata = @import("./metadata/root.zig");
 pub const EntityActorFlags = metadata.EntityActorFlags;

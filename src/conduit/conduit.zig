@@ -9,6 +9,8 @@ const World = @import("./world/world.zig").World;
 const Generator = @import("./world/generator/root.zig");
 const ServerProperties = @import("./config.zig").ServerProperties;
 const EntityType = @import("./entity/entity-type.zig").EntityType;
+const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
+const Entity = @import("./entity/entity.zig").Entity;
 
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
@@ -80,6 +82,9 @@ pub const Conduit = struct {
         const item_count = try ItemPalette.loadItemTypes(self.allocator);
         Raknet.Logger.INFO("Loaded {d} item types", .{item_count});
 
+        const entity_type_count = try EntityTypeRegistry.initRegistry(self.allocator);
+        Raknet.Logger.INFO("Loaded {d} entity types", .{entity_type_count});
+
         self.creative_content = CreativeContentLoader.loadCreativeContent(self.allocator) catch |err| blk: {
             Raknet.Logger.ERROR("Failed to load creative content: {any}", .{err});
             break :blk null;
@@ -147,6 +152,17 @@ pub const Conduit = struct {
         self.raknet.options.advertisement.player_count = @intCast(self.players.count());
     }
 
+    pub fn getEntityByRuntimeId(self: *Conduit, runtime_id: i64) ?*Entity {
+        var worlds_it = self.worlds.valueIterator();
+        while (worlds_it.next()) |world| {
+            var dims_it = world.*.dimensions.valueIterator();
+            while (dims_it.next()) |dim| {
+                if (dim.*.getEntity(runtime_id)) |entity| return entity;
+            }
+        }
+        return null;
+    }
+
     pub fn getPlayerSnapshots(self: *Conduit) []*Player {
         self.players_mutex.lock();
         defer self.players_mutex.unlock();
@@ -169,6 +185,17 @@ pub const Conduit = struct {
         for (snapshots) |player| {
             if (!player.spawned) continue;
             player.entity.fireEvent(.Tick, .{&player.entity});
+        }
+
+        var worlds_it = self.worlds.valueIterator();
+        while (worlds_it.next()) |world| {
+            var dims_it = world.*.dimensions.valueIterator();
+            while (dims_it.next()) |dim| {
+                var ent_it = dim.*.entities.valueIterator();
+                while (ent_it.next()) |entity| {
+                    entity.*.fireEvent(.Tick, .{entity.*});
+                }
+            }
         }
 
         _ = self.tasks.runUntil(work_start, tick_budget_ns * 80 / 100);
@@ -206,6 +233,7 @@ pub const Conduit = struct {
 
         deinitRegistries();
         ItemPalette.deinitRegistry();
+        EntityTypeRegistry.EntityTypeRegistry.deinit();
         if (self.creative_content) |*cc| cc.deinit();
         self.config.deinit();
 

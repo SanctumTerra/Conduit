@@ -38,11 +38,10 @@ pub const Player = struct {
         connection: *Raknet.Connection,
         network: *NetworkHandler,
         loginData: LoginData,
-        runtimeId: i64,
         entity_type: *const EntityType,
     ) !void {
         self.* = .{
-            .entity = Entity.init(allocator, entity_type, runtimeId, null),
+            .entity = Entity.init(allocator, entity_type, null),
             .connection = connection,
             .network = network,
             .loginData = loginData,
@@ -118,6 +117,30 @@ pub const Player = struct {
 
             s.container.setItem(0, item);
             s.container.update();
+        }
+
+        {
+            const EntityTypeRegistry = @import("../entity/entity-type-registry.zig").EntityTypeRegistry;
+            const GravityTrait = @import("../entity/traits/gravity.zig").GravityTrait;
+            const HealthTrait = @import("../entity/traits/health.zig").HealthTrait;
+            const world = self.network.conduit.getWorld("world") orelse return;
+            const dimension = world.getDimension("overworld") orelse return;
+            if (EntityTypeRegistry.get("minecraft:zombie")) |zombie_type| {
+                const pos = self.entity.position;
+                const zombie = dimension.spawnEntity(zombie_type, Protocol.Vector3f.init(pos.x + 3, pos.y, pos.z + 3)) catch return;
+                const gravity = GravityTrait.create(self.entity.allocator, .{
+                    .force = -0.08,
+                    .falling_distance = 0,
+                    .falling_ticks = 0,
+                    .on_ground = false,
+                }) catch return;
+                zombie.addTrait(gravity) catch {};
+                const health = HealthTrait.create(self.entity.allocator, .{
+                    .current = 20,
+                    .max = 20,
+                }) catch return;
+                zombie.addTrait(health) catch {};
+            }
         }
 
         // {

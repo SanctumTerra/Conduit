@@ -150,31 +150,10 @@ pub fn handleResourcePack(
 
                 // AvailableActorIdentifiersPacket
                 {
-                    var str = BinaryStream.init(network.allocator, null, null);
-                    defer str.deinit();
-
-                    var data = Protocol.NBT.CompoundTag.init(network.allocator, null);
-                    defer data.deinit(network.allocator);
-
-                    var player_entry = Protocol.NBT.CompoundTag.init(network.allocator, null);
-                    const id_name = try network.allocator.dupe(u8, "id");
-                    const id_value = try network.allocator.dupe(u8, "minecraft:player");
-                    try player_entry.value.put(network.allocator, "id", Protocol.NBT.Tag{ .String = Protocol.NBT.StringTag.init(id_value, id_name) });
-
-                    const entries = try network.allocator.alloc(Protocol.NBT.Tag, 1);
-                    entries[0] = Protocol.NBT.Tag{ .Compound = player_entry };
-
-                    const list_name = try network.allocator.dupe(u8, "idlist");
-                    const idlist = Protocol.NBT.ListTag.init(entries, list_name);
-
-                    try data.value.put(network.allocator, "idlist", Protocol.NBT.Tag{ .List = idlist });
-
-                    var packet = Protocol.AvailableActorIdentifiersPacket{
-                        .data = data,
-                    };
-
-                    const serialized = try packet.serialize(&str);
-                    try network.sendPacket(player.connection, serialized);
+                    const EntityTypeRegistry = @import("../../entity/entity-type-registry.zig");
+                    if (EntityTypeRegistry.EntityTypeRegistry.getSerializedPacket()) |serialized| {
+                        try network.sendPacket(player.connection, serialized);
+                    }
                 }
 
                 // ItemRegistryPacket

@@ -11,3 +11,7 @@ pub const chunk_loading = @import("./chunk-loading.zig");
 pub const ChunkLoadingTrait = chunk_loading.ChunkLoadingTrait;
 pub const cursor = @import("./cursor.zig");
 pub const CursorTrait = cursor.CursorTrait;
+pub const gravity = @import("./gravity.zig");
+pub const GravityTrait = gravity.GravityTrait;
+pub const health = @import("./health.zig");
+pub const HealthTrait = health.HealthTrait;

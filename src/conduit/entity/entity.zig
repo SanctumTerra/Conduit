@@ -27,12 +27,12 @@ pub const Entity = struct {
     traits: std.ArrayListUnmanaged(EntityTraitInstance),
     dimension: ?*Dimension,
 
-    pub fn init(allocator: std.mem.Allocator, entity_type: *const EntityType, runtime_id: i64, dimension: ?*Dimension) Entity {
+    pub fn init(allocator: std.mem.Allocator, entity_type: *const EntityType, dimension: ?*Dimension) Entity {
         const uid = @atomicRmw(i64, &nextUniqueId, .Add, 1, .monotonic);
         return .{
             .allocator = allocator,
             .entity_type = entity_type,
-            .runtime_id = runtime_id,
+            .runtime_id = uid,
             .unique_id = uid,
             .position = Protocol.Vector3f.init(0, 0, 0),
             .rotation = Protocol.Vector2f.init(0, 0),

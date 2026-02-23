@@ -68,8 +68,6 @@ pub fn handleLogin(
         } else |_| {}
     }
 
-    network.lastRuntimeId += 1;
-
     const player = try network.allocator.create(Player);
     errdefer network.allocator.destroy(player);
     try player.init(
@@ -77,7 +75,6 @@ pub fn handleLogin(
         connection,
         network,
         data,
-        network.lastRuntimeId,
         &network.conduit.player_entity_type,
     );
 

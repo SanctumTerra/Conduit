@@ -6,6 +6,8 @@ const Chunk = @import("../chunk/chunk.zig").Chunk;
 const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
 const TerrainGenerator = @import("../generator/terrain-generator.zig").TerrainGenerator;
 const ThreadedGenerator = @import("../generator/threaded-generator.zig").ThreadedGenerator;
+const Entity = @import("../../entity/entity.zig").Entity;
+const EntityType = @import("../../entity/entity-type.zig").EntityType;
 
 pub const ChunkHash = i64;
 
@@ -19,6 +21,7 @@ pub const Dimension = struct {
     identifier: []const u8,
     dimension_type: Protocol.DimensionType,
     chunks: std.AutoHashMap(ChunkHash, *Chunk),
+    entities: std.AutoHashMap(i64, *Entity),
     spawn_position: Protocol.BlockPosition,
     generator: ?*ThreadedGenerator,
 
@@ -35,6 +38,7 @@ pub const Dimension = struct {
             .identifier = identifier,
             .dimension_type = dimension_type,
             .chunks = std.AutoHashMap(ChunkHash, *Chunk).init(allocator),
+            .entities = std.AutoHashMap(i64, *Entity).init(allocator),
             .spawn_position = Protocol.BlockPosition{
                 .x = 0,
                 .y = 32767,
@@ -45,6 +49,13 @@ pub const Dimension = struct {
     }
 
     pub fn deinit(self: *Dimension) void {
+        var entity_iter = self.entities.valueIterator();
+        while (entity_iter.next()) |entity| {
+            entity.*.deinit();
+            self.allocator.destroy(entity.*);
+        }
+        self.entities.deinit();
+
         var iter = self.chunks.valueIterator();
         while (iter.next()) |chunk| {
             chunk.*.deinit();
@@ -95,5 +106,75 @@ pub const Dimension = struct {
         const cz = pos.z >> 4;
         const chunk = try self.getOrCreateChunk(cx, cz);
         try chunk.setPermutation(pos.x, pos.y, pos.z, permutation, layer);
+    }
+
+    pub fn getEntity(self: *Dimension, runtime_id: i64) ?*Entity {
+        return self.entities.get(runtime_id);
+    }
+
+    pub fn spawnEntity(self: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f) !*Entity {
+        const entity = try self.allocator.create(Entity);
+        entity.* = Entity.init(self.allocator, entity_type, self);
+        entity.position = position;
+        try self.entities.put(entity.runtime_id, entity);
+        try self.broadcastAddEntity(entity);
+        return entity;
+    }
+
+    pub fn removeEntity(self: *Dimension, entity: *Entity) !void {
+        try self.broadcastRemoveEntity(entity);
+        _ = self.entities.remove(entity.runtime_id);
+        entity.deinit();
+        self.allocator.destroy(entity);
+    }
+
+    fn broadcastAddEntity(self: *Dimension, entity: *Entity) !void {
+        const BinaryStream = @import("BinaryStream").BinaryStream;
+        var stream = BinaryStream.init(self.allocator, null, null);
+        defer stream.deinit();
+
+        const data = try entity.flags.buildDataItems(self.allocator);
+        defer self.allocator.free(data);
+
+        const packet = Protocol.AddEntityPacket{
+            .uniqueEntityId = entity.unique_id,
+            .runtimeEntityId = @bitCast(entity.runtime_id),
+            .entityType = entity.entity_type.identifier,
+            .position = entity.position,
+            .pitch = entity.rotation.y,
+            .yaw = entity.rotation.x,
+            .headYaw = entity.head_yaw,
+            .bodyYaw = entity.rotation.x,
+            .entityMetadata = data,
+            .entityProperties = Protocol.PropertySyncData.init(self.allocator),
+        };
+
+        const serialized = try packet.serialize(&stream);
+
+        const conduit = self.world.conduit;
+        const snapshots = conduit.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            conduit.network.sendPacket(player.connection, serialized) catch {};
+        }
+    }
+
+    fn broadcastRemoveEntity(self: *Dimension, entity: *Entity) !void {
+        const BinaryStream = @import("BinaryStream").BinaryStream;
+        var stream = BinaryStream.init(self.allocator, null, null);
+        defer stream.deinit();
+
+        const packet = Protocol.RemoveEntityPacket{
+            .uniqueEntityId = entity.unique_id,
+        };
+
+        const serialized = try packet.serialize(&stream);
+
+        const conduit = self.world.conduit;
+        const snapshots = conduit.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            conduit.network.sendPacket(player.connection, serialized) catch {};
+        }
     }
 };
