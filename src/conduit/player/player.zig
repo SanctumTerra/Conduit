@@ -94,7 +94,7 @@ pub const Player = struct {
 
             const display = try DisplayTrait.create(self.entity.allocator, .{});
             try item.addTrait(display);
-            try Display.setDisplayName(&item, "§rA very cool §7shovel");
+            try Display.setDisplayName(&item, "§r§7Custom §bDiamond Shovel");
 
             s.container.setItem(0, item);
             s.container.update();

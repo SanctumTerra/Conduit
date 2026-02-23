@@ -1,5 +1,6 @@
 const std = @import("std");
 const Events = @import("events/root.zig");
+const BinaryStream = @import("BinaryStream").BinaryStream;
 const Raknet = @import("Raknet");
 const Protocol = @import("protocol");
 const NetworkHandler = @import("./network/root.zig").NetworkHandler;
@@ -98,6 +99,22 @@ pub const Conduit = struct {
     pub fn stop(self: *Conduit) !void {
         var event = Events.types.ServerShutdownEvent{};
         _ = self.events.emit(.ServerShutdown, &event);
+
+        var it = self.players.valueIterator();
+        while (it.next()) |player_ptr| {
+            const player = player_ptr.*;
+            var str = BinaryStream.init(self.allocator, null, null);
+            defer str.deinit();
+            var disconnect = Protocol.DisconnectPacket{
+                .hideScreen = false,
+                .reason = .Disconnected,
+                .message = "Server shutdown.",
+                .filtered = "Server shutdown.",
+            };
+            const serialized = try disconnect.serialize(&str);
+            try self.network.sendImmediate(player.connection, serialized);
+            player.connection.active = false;
+        }
     }
 
     pub fn getPlayerByConnection(self: *Conduit, connection: *Raknet.Connection) ?*Player {
