@@ -82,7 +82,7 @@ pub fn EntityTrait(comptime State: type, comptime config: EntityTraitConfig(Stat
     return struct {
         pub const identifier = config.identifier;
         pub const tags = config.tags;
-        pub const Component = config.component;
+        pub const components = config.components;
         pub const TraitState = State;
 
         pub const vtable = blk: {
@@ -115,8 +115,8 @@ pub fn EntityTrait(comptime State: type, comptime config: EntityTraitConfig(Stat
             for (tags) |tag| {
                 if (!entity_type.hasTag(tag)) return false;
             }
-            if (Component) |C| {
-                if (!entity_type.hasComponent(C)) return false;
+            for (components) |comp| {
+                if (!entity_type.hasComponent(comp)) return false;
             }
             return true;
         }
@@ -187,7 +187,7 @@ pub fn EntityTraitConfig(comptime State: type) type {
     return struct {
         identifier: []const u8,
         tags: []const []const u8 = &.{},
-        component: ?type = null,
+        components: []const []const u8 = &.{},
         onAttach: ?*const fn (*State, *Entity) void = null,
         onDetach: ?*const fn (*State, *Entity) void = null,
         onTick: ?*const fn (*State, *Entity) void = null,

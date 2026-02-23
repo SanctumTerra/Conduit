@@ -58,7 +58,7 @@ pub const Conduit = struct {
             .players_mutex = std.Thread.Mutex{},
             .snapshot_buf = std.ArrayList(*Player){ .items = &.{}, .capacity = 0 },
             .worlds = std.StringHashMap(*World).init(allocator),
-            .player_entity_type = EntityType.init(allocator, "minecraft:player", 1, &.{}),
+            .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
             .creative_content = null,
             .network = undefined,
         };
