@@ -24,7 +24,7 @@ pub fn handleSetLocalPlayerAsInitialized(
     for (snapshots) |p| {
         try all_entries.append(network.allocator, .{
             .uuid = p.uuid,
-            .entityUniqueId = p.runtimeId,
+            .entityUniqueId = p.entity.runtime_id,
             .username = p.username,
             .xuid = p.xuid,
             .skin = &p.loginData.client_data,
@@ -43,7 +43,7 @@ pub fn handleSetLocalPlayerAsInitialized(
 
     const new_entry = [_]Protocol.PlayerListEntry{.{
         .uuid = player.uuid,
-        .entityUniqueId = player.runtimeId,
+        .entityUniqueId = player.entity.runtime_id,
         .username = player.username,
         .xuid = player.xuid,
         .skin = &player.loginData.client_data,
@@ -59,7 +59,7 @@ pub fn handleSetLocalPlayerAsInitialized(
     const new_serialized = try new_packet.serialize(&new_stream, network.allocator);
 
     for (snapshots) |other| {
-        if (other.runtimeId == player.runtimeId) continue;
+        if (other.entity.runtime_id == player.entity.runtime_id) continue;
 
         try network.sendPacket(other.connection, new_serialized);
 
@@ -68,10 +68,10 @@ pub fn handleSetLocalPlayerAsInitialized(
         const add_packet = Protocol.AddPlayerPacket{
             .uuid = player.uuid,
             .username = player.username,
-            .entityRuntimeId = player.runtimeId,
-            .position = player.position,
+            .entityRuntimeId = player.entity.runtime_id,
+            .position = player.entity.position,
             .entityProperties = Protocol.PropertySyncData.init(network.allocator),
-            .abilityEntityUniqueId = player.runtimeId,
+            .abilityEntityUniqueId = player.entity.runtime_id,
         };
         const add_serialized = try add_packet.serialize(&add_stream);
         try network.sendPacket(other.connection, add_serialized);
@@ -90,10 +90,10 @@ pub fn handleSetLocalPlayerAsInitialized(
         const other_packet = Protocol.AddPlayerPacket{
             .uuid = other.uuid,
             .username = other.username,
-            .entityRuntimeId = other.runtimeId,
-            .position = other.position,
+            .entityRuntimeId = other.entity.runtime_id,
+            .position = other.entity.position,
             .entityProperties = Protocol.PropertySyncData.init(network.allocator),
-            .abilityEntityUniqueId = other.runtimeId,
+            .abilityEntityUniqueId = other.entity.runtime_id,
         };
         const other_serialized = try other_packet.serialize(&other_stream);
         try network.sendPacket(connection, other_serialized);
@@ -109,16 +109,16 @@ pub fn handleSetLocalPlayerAsInitialized(
 
         var other_flags_stream = BinaryStream.init(network.allocator, null, null);
         defer other_flags_stream.deinit();
-        const other_flags_data = try other.flags.buildDataItems(network.allocator);
-        var other_flags_packet = Protocol.SetActorDataPacket.init(network.allocator, other.runtimeId, 0, other_flags_data);
+        const other_flags_data = try other.entity.flags.buildDataItems(network.allocator);
+        var other_flags_packet = Protocol.SetActorDataPacket.init(network.allocator, other.entity.runtime_id, 0, other_flags_data);
         defer other_flags_packet.deinit();
         const other_flags_serialized = try other_flags_packet.serialize(&other_flags_stream);
         try network.sendPacket(connection, other_flags_serialized);
 
         var new_flags_stream = BinaryStream.init(network.allocator, null, null);
         defer new_flags_stream.deinit();
-        const new_flags_data = try player.flags.buildDataItems(network.allocator);
-        var new_flags_packet = Protocol.SetActorDataPacket.init(network.allocator, player.runtimeId, 0, new_flags_data);
+        const new_flags_data = try player.entity.flags.buildDataItems(network.allocator);
+        var new_flags_packet = Protocol.SetActorDataPacket.init(network.allocator, player.entity.runtime_id, 0, new_flags_data);
         defer new_flags_packet.deinit();
         const new_flags_serialized = try new_flags_packet.serialize(&new_flags_stream);
         try network.sendPacket(other.connection, new_flags_serialized);
