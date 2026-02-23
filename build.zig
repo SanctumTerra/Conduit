@@ -37,6 +37,9 @@ pub fn build(b: *std.Build) void {
     conduit_mod.addImport("protocol", protocol_mod);
     conduit_mod.addImport("nbt", nbt_mod);
     conduit_mod.linkLibrary(zlib_dep.artifact("z"));
+    if (target.result.os.tag == .windows) {
+        conduit_mod.linkSystemLibrary("psapi", .{});
+    }
 
     const exe = b.addExecutable(.{
         .name = "Conduit",

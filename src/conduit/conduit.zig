@@ -16,6 +16,7 @@ const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 
 const ItemPalette = @import("./items/item-palette.zig");
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
+const TaskQueue = @import("./tasks.zig").TaskQueue;
 
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
@@ -30,6 +31,10 @@ pub const Conduit = struct {
     worlds: std.StringHashMap(*World),
     player_entity_type: EntityType,
     creative_content: ?CreativeContentLoader.CreativeContentData,
+    tick_count: u64 = 0,
+    work_time_accumulator: u64 = 0,
+    current_tps: f64 = 20.0,
+    tasks: TaskQueue,
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
         const config = try ServerProperties.load(allocator, "server.properties");
@@ -62,6 +67,7 @@ pub const Conduit = struct {
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
             .creative_content = null,
             .network = undefined,
+            .tasks = TaskQueue.init(allocator),
         };
     }
 
@@ -90,6 +96,7 @@ pub const Conduit = struct {
         _ = try world.createDimension("overworld", .Overworld, threaded);
 
         self.network = try NetworkHandler.init(self);
+        self.raknet.setTickCallback(onTick, self);
         var event = Events.types.ServerStartEvent{};
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
@@ -151,6 +158,36 @@ pub const Conduit = struct {
         return self.snapshot_buf.items;
     }
 
+    fn onTick(context: ?*anyopaque) void {
+        const self = @as(*Conduit, @ptrCast(@alignCast(context)));
+        const work_start = std.time.nanoTimestamp();
+        const tick_budget_ns: u64 = std.time.ns_per_s / @as(u64, self.config.max_tps);
+
+        self.tick_count += 1;
+
+        const snapshots = self.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            player.entity.fireEvent(.Tick, .{&player.entity});
+        }
+
+        _ = self.tasks.runUntil(work_start, tick_budget_ns * 80 / 100);
+
+        const work_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - work_start));
+        self.work_time_accumulator += work_ns;
+
+        if (self.tick_count % 20 == 0) {
+            const avg_work_ns = self.work_time_accumulator / 20;
+            self.work_time_accumulator = 0;
+            if (avg_work_ns >= tick_budget_ns) {
+                const work_s: f64 = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000_000.0;
+                self.current_tps = @min(20.0, 1.0 / work_s);
+            } else {
+                self.current_tps = 20.0;
+            }
+        }
+    }
+
     pub fn createWorld(self: *Conduit, identifier: []const u8) !*World {
         if (self.worlds.get(identifier)) |existing| return existing;
 
@@ -190,5 +227,6 @@ pub const Conduit = struct {
 
         self.events.deinit();
         self.network.deinit();
+        self.tasks.deinit();
     }
 };

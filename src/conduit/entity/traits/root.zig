@@ -5,3 +5,7 @@ pub const EntityTraitConfig = @import("./trait.zig").EntityTraitConfig;
 pub const Event = @import("./trait.zig").Event;
 pub const inventory = @import("./inventory.zig");
 pub const InventoryTrait = inventory.InventoryTrait;
+pub const stats = @import("./stats.zig");
+pub const StatsTrait = stats.StatsTrait;
+pub const chunk_loading = @import("./chunk-loading.zig");
+pub const ChunkLoadingTrait = chunk_loading.ChunkLoadingTrait;

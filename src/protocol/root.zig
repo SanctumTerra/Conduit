@@ -104,3 +104,5 @@ pub const InventoryContentPacket = @import("./packets/inventory-content.zig").In
 pub const InteractPacket = @import("./packets/interact.zig").InteractPacket;
 pub const MobEquipmentPacket = @import("./packets/mob-equipment.zig").MobEquipmentPacket;
 pub const PacketViolationWarningPacket = @import("./packets/packet-violation-warning.zig").PacketViolationWarningPacket;
+pub const SetTitlePacket = @import("./packets/set-title.zig").SetTitlePacket;
+pub const TitleType = @import("./packets/set-title.zig").TitleType;
