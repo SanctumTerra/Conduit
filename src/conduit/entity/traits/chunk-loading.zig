@@ -90,6 +90,7 @@ fn queueChunkStreaming(player: *Player) !void {
     for (old_hashes.items) |h| {
         _ = player.sent_chunks.remove(h);
     }
+    overworld.releaseUnrenderedChunks(old_hashes.items);
     old_hashes.deinit(allocator);
 
     const state = try allocator.create(ChunkStreamState);

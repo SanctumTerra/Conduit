@@ -4,6 +4,7 @@ const Protocol = @import("protocol");
 const World = @import("../world.zig").World;
 const Chunk = @import("../chunk/chunk.zig").Chunk;
 const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const Block = @import("../block/block.zig").Block;
 const TerrainGenerator = @import("../generator/terrain-generator.zig").TerrainGenerator;
 const ThreadedGenerator = @import("../generator/threaded-generator.zig").ThreadedGenerator;
 const Entity = @import("../../entity/entity.zig").Entity;
@@ -94,6 +95,27 @@ pub const Dimension = struct {
         }
     }
 
+    pub fn releaseUnrenderedChunks(self: *Dimension, hashes: []const i64) void {
+        const conduit = self.world.conduit;
+        const snapshots = conduit.getPlayerSnapshots();
+        for (hashes) |h| {
+            var still_needed = false;
+            for (snapshots) |player| {
+                if (player.sent_chunks.contains(h)) {
+                    still_needed = true;
+                    break;
+                }
+            }
+            if (!still_needed) {
+                if (self.chunks.fetchRemove(h)) |entry| {
+                    var chunk = entry.value;
+                    chunk.deinit();
+                    self.allocator.destroy(chunk);
+                }
+            }
+        }
+    }
+
     pub fn getPermutation(self: *Dimension, pos: Protocol.BlockPosition, layer: usize) !*BlockPermutation {
         const cx = pos.x >> 4;
         const cz = pos.z >> 4;
@@ -106,6 +128,10 @@ pub const Dimension = struct {
         const cz = pos.z >> 4;
         const chunk = try self.getOrCreateChunk(cx, cz);
         try chunk.setPermutation(pos.x, pos.y, pos.z, permutation, layer);
+    }
+
+    pub fn getBlock(self: *Dimension, pos: Protocol.BlockPosition) Block {
+        return Block.init(self, pos);
     }
 
     pub fn getEntity(self: *Dimension, runtime_id: i64) ?*Entity {

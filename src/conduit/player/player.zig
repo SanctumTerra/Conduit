@@ -91,9 +91,25 @@ pub const Player = struct {
     }
 
     pub fn disconnect(self: *Player) !void {
+        self.releaseChunks();
         self.network.conduit.removePlayer(self);
         self.deinit();
         self.entity.allocator.destroy(self);
+    }
+
+    fn releaseChunks(self: *Player) void {
+        const world = self.network.conduit.getWorld("world") orelse return;
+        const overworld = world.getDimension("overworld") orelse return;
+        const allocator = self.entity.allocator;
+
+        var hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+        var it = self.sent_chunks.keyIterator();
+        while (it.next()) |key| {
+            hashes.append(allocator, key.*) catch {};
+        }
+        self.sent_chunks.clearAndFree();
+        overworld.releaseUnrenderedChunks(hashes.items);
+        hashes.deinit(allocator);
     }
 
     pub fn onSpawn(self: *Player) !void {

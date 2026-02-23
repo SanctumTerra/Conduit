@@ -32,7 +32,7 @@ fn onTick(state: *State, entity: *Entity) void {
     entity.position = Protocol.Vector3f.init(new_pos.x, new_pos.y, new_pos.z);
 
     const bx = @as(i32, @intFromFloat(@floor(entity.position.x)));
-    const by = @as(i32, @intFromFloat(@floor(entity.position.y - 0.001)));
+    const by = @as(i32, @intFromFloat(@floor(entity.position.y - 0.01)));
     const bz = @as(i32, @intFromFloat(@floor(entity.position.z)));
 
     const ground = !isAirAt(dimension, bx, by, bz);
@@ -49,11 +49,11 @@ fn onTick(state: *State, entity: *Entity) void {
 
         entity.motion.x *= 0.6;
         entity.motion.z *= 0.6;
-
         if (@abs(entity.motion.x) < 0.001) entity.motion.x = 0;
         if (@abs(entity.motion.z) < 0.001) entity.motion.z = 0;
 
         if (!state.on_ground and state.falling_distance > 0) {
+            broadcastMove(entity, dimension, true);
             state.falling_distance = 0;
             state.falling_ticks = 0;
         }
@@ -64,14 +64,11 @@ fn onTick(state: *State, entity: *Entity) void {
             state.falling_distance += @abs(entity.motion.y);
             state.falling_ticks += 1;
         }
-    }
-
-    if (hasMotion(entity) or !state.on_ground) {
-        broadcastMove(entity, dimension);
+        broadcastMove(entity, dimension, false);
     }
 }
 
-fn broadcastMove(entity: *Entity, dimension: *Dimension) void {
+fn broadcastMove(entity: *Entity, dimension: *Dimension, on_ground: bool) void {
     const conduit = dimension.world.conduit;
     const allocator = conduit.allocator;
 
@@ -80,6 +77,7 @@ fn broadcastMove(entity: *Entity, dimension: *Dimension) void {
 
     var packet = Protocol.MoveActorDeltaPacket.init(@bitCast(entity.runtime_id));
     packet.flags = MoveDeltaFlags.HasX | MoveDeltaFlags.HasY | MoveDeltaFlags.HasZ;
+    if (on_ground) packet.flags |= MoveDeltaFlags.OnGround;
     packet.x = entity.position.x;
     packet.y = entity.position.y;
     packet.z = entity.position.z;
