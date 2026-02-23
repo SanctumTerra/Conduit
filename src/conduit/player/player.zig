@@ -5,79 +5,74 @@ const Protocol = @import("protocol");
 const LoginData = Protocol.Login.Decoder.LoginData;
 pub const NetworkHandler = @import("../network/network-handler.zig").NetworkHandler;
 const Dimension = @import("../world/dimension/dimension.zig").Dimension;
-const EntityActorFlags = @import("../entity/root.zig").EntityActorFlags;
-const Attributes = @import("../entity/root.zig").Attributes;
+const Entity = @import("../entity/entity.zig").Entity;
+const EntityType = @import("../entity/entity-type.zig").EntityType;
 const ItemStack = @import("../items/item-stack.zig").ItemStack;
+const Container = @import("../container/container.zig").Container;
+
+const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 
 pub const Player = struct {
-    allocator: std.mem.Allocator,
+    entity: Entity,
     connection: *Raknet.Connection,
     network: *NetworkHandler,
     loginData: LoginData,
-    runtimeId: i64,
 
     xuid: []const u8,
     username: []const u8,
     uuid: []const u8,
-    flags: EntityActorFlags,
-    attributes: Attributes,
-    position: Protocol.Vector3f,
-    rotation: Protocol.Vector2f,
-    motion: Protocol.Vector2f,
-    // TODO Switch to Rotation struct once finished
-    head_yaw: f32,
 
     view_distance: i32 = 8,
     sent_chunks: std.AutoHashMap(i64, void),
     spawned: bool = false,
+    opened_container: ?*Container = null,
 
     pub fn init(
+        self: *Player,
         allocator: std.mem.Allocator,
         connection: *Raknet.Connection,
         network: *NetworkHandler,
         loginData: LoginData,
         runtimeId: i64,
-    ) !Player {
-        var player = Player{
-            .allocator = allocator,
+        entity_type: *const EntityType,
+    ) !void {
+        self.* = .{
+            .entity = Entity.init(allocator, entity_type, runtimeId, null),
             .connection = connection,
             .network = network,
             .loginData = loginData,
-            .runtimeId = runtimeId,
             .xuid = loginData.identity_data.xuid,
             .username = loginData.identity_data.display_name,
             .uuid = loginData.identity_data.identity,
             .sent_chunks = std.AutoHashMap(i64, void).init(allocator),
-            .flags = undefined,
-            .attributes = Attributes.init(allocator),
-            .position = Protocol.Vector3f.init(0, 0, 0),
-            .rotation = Protocol.Vector2f.init(0, 0),
-            .motion = Protocol.Vector2f.init(0, 0),
-            .head_yaw = 0.0,
         };
-        player.flags = EntityActorFlags.init(&player);
 
-        player.flags.setFlag(.HasGravity, true);
-        player.flags.setFlag(.Breathing, true);
-        player.flags.setFlag(.ShowName, true);
-        player.flags.setFlag(.AlwaysShowName, true);
-        player.attributes.registerWithCurrent(.Movement, 0, 3.4028235e+38, 0.1, 0.1) catch {};
-        player.attributes.registerWithCurrent(.UnderwaterMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};
-        player.attributes.registerWithCurrent(.LavaMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};
+        self.entity.flags.setFlag(.HasGravity, true);
+        self.entity.flags.setFlag(.Breathing, true);
+        self.entity.flags.setFlag(.ShowName, true);
+        self.entity.flags.setFlag(.AlwaysShowName, true);
+        self.entity.attributes.registerWithCurrent(.Movement, 0, 3.4028235e+38, 0.1, 0.1) catch {};
+        self.entity.attributes.registerWithCurrent(.UnderwaterMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};
+        self.entity.attributes.registerWithCurrent(.LavaMovement, 0, 3.4028235e+38, 0.02, 0.02) catch {};
 
-        return player;
+        const inv = try InventoryTrait.create(allocator, .{
+            .container = undefined,
+            .selected_slot = 0,
+            .opened = false,
+        });
+        try self.entity.addTrait(inv);
     }
 
     pub fn deinit(self: *Player) void {
         self.sent_chunks.deinit();
         self.loginData.deinit();
-        self.attributes.deinit();
+        self.entity.deinit();
     }
 
     pub fn disconnect(self: *Player) !void {
         self.network.conduit.removePlayer(self);
         self.deinit();
-        self.allocator.destroy(self);
+        self.entity.allocator.destroy(self);
     }
 
     pub fn onSpawn(self: *Player) !void {
@@ -86,41 +81,51 @@ pub const Player = struct {
         };
         Raknet.Logger.INFO("Player {s} has spawned.", .{self.username});
 
-        var item = ItemStack.fromIdentifier("minecraft:diamond_shovel", .{}) orelse return;
-        defer item.deinit(self.allocator);
+        if (self.entity.getTraitState(InventoryTrait)) |state| {
+            var s: *InventoryTrait.TraitState = state;
 
-        {
-            var str = BinaryStream.init(self.allocator, null, null);
-            defer str.deinit();
+            const item = ItemStack.fromIdentifier(
+                "minecraft:diamond_shovel",
+                .{},
+            ) orelse return;
 
-            const packet = Protocol.InventorySlotPacket{
-                .containerId = .Inventory,
-                .fullContainerName = .{
-                    .identifier = .Inventory,
-                    .dynamicIdentifier = 0,
-                },
-                .item = item.toNetworkStack(),
-                .storageItem = .{
-                    .network = 0,
-                    .extras = null,
-                    .itemStackId = null,
-                    .metadata = null,
-                    .networkBlockId = null,
-                    .stackSize = null,
-                },
-                .slot = 0,
-            };
-            const serialized = try packet.serialize(&str);
-            try self.network.sendPacket(self.connection, serialized);
+            s.container.setItem(0, item);
+            s.container.update();
         }
+
+        // {
+
+        //     var str = BinaryStream.init(self.entity.allocator, null, null);
+        //     defer str.deinit();
+
+        //     const packet = Protocol.InventorySlotPacket{
+        //         .containerId = .Inventory,
+        //         .fullContainerName = .{
+        //             .identifier = .AnvilInput,
+        //             .dynamicIdentifier = 0,
+        //         },
+        //         .item = item.toNetworkStack(),
+        //         .storageItem = .{
+        //             .network = 0,
+        //             .extras = null,
+        //             .itemStackId = null,
+        //             .metadata = null,
+        //             .networkBlockId = null,
+        //             .stackSize = null,
+        //         },
+        //         .slot = 0,
+        //     };
+        //     const serialized = try packet.serialize(&str);
+        //     try self.network.sendPacket(self.connection, serialized);
+        // }
     }
 
     pub fn broadcastActorFlags(self: *Player) !void {
-        var str = BinaryStream.init(self.allocator, null, null);
+        var str = BinaryStream.init(self.entity.allocator, null, null);
         defer str.deinit();
 
-        const data = try self.flags.buildDataItems(self.allocator);
-        var packet = Protocol.SetActorDataPacket.init(self.allocator, self.runtimeId, 0, data);
+        const data = try self.entity.flags.buildDataItems(self.entity.allocator);
+        var packet = Protocol.SetActorDataPacket.init(self.entity.allocator, self.entity.runtime_id, 0, data);
         defer packet.deinit();
         const serialized = try packet.serialize(&str);
 
@@ -132,6 +137,7 @@ pub const Player = struct {
     }
 
     fn sendSpawnChunks(self: *Player) !void {
+        const allocator = self.entity.allocator;
         const world = self.network.conduit.getWorld("world") orelse return;
         const overworld = world.getDimension("overworld") orelse return;
 
@@ -140,8 +146,8 @@ pub const Player = struct {
 
         var packet_batch = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
         defer {
-            for (packet_batch.items) |pkt| self.allocator.free(pkt);
-            packet_batch.deinit(self.allocator);
+            for (packet_batch.items) |pkt| allocator.free(pkt);
+            packet_batch.deinit(allocator);
         }
 
         var cx: i32 = -radius;
@@ -155,12 +161,12 @@ pub const Player = struct {
 
                 const chunk = try overworld.getOrCreateChunk(cx, cz);
 
-                var chunk_stream = BinaryStream.init(self.allocator, null, null);
+                var chunk_stream = BinaryStream.init(allocator, null, null);
                 defer chunk_stream.deinit();
                 try chunk.serialize(&chunk_stream);
                 const chunk_data = chunk_stream.getBuffer();
 
-                var pkt_stream = BinaryStream.init(self.allocator, null, null);
+                var pkt_stream = BinaryStream.init(allocator, null, null);
                 defer pkt_stream.deinit();
 
                 var level_chunk = Protocol.LevelChunkPacket{
@@ -175,12 +181,12 @@ pub const Player = struct {
                 };
 
                 const serialized = try level_chunk.serialize(&pkt_stream);
-                try packet_batch.append(self.allocator, try self.allocator.dupe(u8, serialized));
+                try packet_batch.append(allocator, try allocator.dupe(u8, serialized));
                 try self.sent_chunks.put(chunk_hash, {});
 
                 if (packet_batch.items.len >= batch_size) {
                     try self.network.sendPackets(self.connection, packet_batch.items);
-                    for (packet_batch.items) |pkt| self.allocator.free(pkt);
+                    for (packet_batch.items) |pkt| allocator.free(pkt);
                     packet_batch.clearRetainingCapacity();
                 }
             }
@@ -190,7 +196,7 @@ pub const Player = struct {
             try self.network.sendPackets(self.connection, packet_batch.items);
         }
 
-        var pub_stream = BinaryStream.init(self.allocator, null, null);
+        var pub_stream = BinaryStream.init(allocator, null, null);
         defer pub_stream.deinit();
 
         var update = Protocol.NetworkChunkPublisherUpdatePacket{
