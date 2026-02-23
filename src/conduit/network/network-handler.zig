@@ -182,6 +182,13 @@ pub const NetworkHandler = struct {
         conn.sendReliableMessage(compressed, .Normal);
     }
 
+    pub fn sendImmediate(self: *NetworkHandler, conn: *Raknet.Connection, packet: []const u8) !void {
+        const packets = [_][]const u8{packet};
+        const compressed = try Compression.compress(&packets, self.options, self.allocator);
+        defer self.allocator.free(compressed);
+        conn.sendReliableMessage(compressed, .Immediate);
+    }
+
     pub fn sendPackets(self: *NetworkHandler, conn: *Raknet.Connection, packets: []const []const u8) !void {
         const compressed = try Compression.compress(packets, self.options, self.allocator);
         defer self.allocator.free(compressed);
