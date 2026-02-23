@@ -17,6 +17,10 @@ const handleSetLocalPlayerAsInitialized = @import("./handlers/set-local-player-a
 const handlePlayerAuthInput = @import("./handlers/player-auth-input.zig").handlePlayerAuthInput;
 const handleAnimate = @import("./handlers/animate.zig").handleAnimate;
 const handleClientCacheStatus = @import("./handlers/client-cache-status.zig").handleClientCacheStatus;
+const handleInteract = @import("./handlers/interact.zig").handleInteract;
+const handleMobEquipment = @import("./handlers/mob-equipment.zig").handleMobEquipment;
+const handlePacketViolationWarning = @import("./handlers/packet-violation-warning.zig").handlePacketViolationWarning;
+const handleContainerClose = @import("./handlers/container-close.zig").handleContainerClose;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
@@ -127,6 +131,37 @@ pub const NetworkHandler = struct {
                 ) catch |err| {
                     Raknet.Logger.ERROR("ClientCacheStatus error: {any}", .{err});
                 },
+                Packet.Interact => handleInteract(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("Interact error: {any}", .{err});
+                },
+                Packet.MobEquipment => handleMobEquipment(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("MobEquipment error: {any}", .{err});
+                },
+                Packet.ContainerClose => handleContainerClose(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("ContainerClose error: {any}", .{err});
+                },
+                Packet.PacketViolationWarning => handlePacketViolationWarning(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("PacketViolationWarning error: {any}", .{err});
+                },
+                Packet.EmoteList,
+                Packet.ServerboundLoadingScreenPacket,
+                => {},
                 else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
             }
         }
