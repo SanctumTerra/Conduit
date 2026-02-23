@@ -9,7 +9,8 @@ pub fn handleMobEquipment(
     connection: *Raknet.Connection,
     stream: *BinaryStream,
 ) !void {
-    const packet = try Protocol.MobEquipmentPacket.deserialize(stream);
+    var packet = try Protocol.MobEquipmentPacket.deserialize(stream);
+    defer packet.deinit(stream.allocator);
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
 
     if (player.entity.getTraitState(inventory.InventoryTrait)) |state| {

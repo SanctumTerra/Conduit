@@ -10,6 +10,10 @@ pub const NetworkItemStackDescriptor = struct {
     networkBlockId: ?i32,
     extras: ?ItemInstanceUserData,
 
+    pub fn deinit(self: *NetworkItemStackDescriptor, allocator: std.mem.Allocator) void {
+        if (self.extras) |*extras| extras.deinit(allocator);
+    }
+
     pub fn read(stream: *BinaryStream, allocator: std.mem.Allocator) !NetworkItemStackDescriptor {
         const network = try stream.readZigZag();
         if (network == 0) return .{

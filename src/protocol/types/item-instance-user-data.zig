@@ -8,6 +8,14 @@ pub const ItemInstanceUserData = struct {
     canDestroy: []const []const u8,
     ticking: ?i64,
 
+    pub fn deinit(self: *ItemInstanceUserData, allocator: std.mem.Allocator) void {
+        if (self.nbt) |*nbt| nbt.deinit(allocator);
+        for (self.canPlaceOn) |s| allocator.free(s);
+        allocator.free(self.canPlaceOn);
+        for (self.canDestroy) |s| allocator.free(s);
+        allocator.free(self.canDestroy);
+    }
+
     pub fn read(stream: *BinaryStream, allocator: std.mem.Allocator, networkId: i32) !ItemInstanceUserData {
         const marker = try stream.readUint16(.Little);
 

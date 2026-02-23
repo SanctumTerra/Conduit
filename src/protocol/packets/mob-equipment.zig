@@ -11,6 +11,10 @@ pub const MobEquipmentPacket = struct {
     selected_slot: u8,
     container_id: ContainerId,
 
+    pub fn deinit(self: *MobEquipmentPacket, allocator: std.mem.Allocator) void {
+        self.item.deinit(allocator);
+    }
+
     pub fn serialize(self: *const MobEquipmentPacket, stream: *BinaryStream) ![]const u8 {
         try stream.writeVarInt(Packet.MobEquipment);
         try stream.writeVarLong(self.runtime_entity_id);
