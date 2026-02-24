@@ -122,16 +122,16 @@ pub const Container = struct {
         return false;
     }
 
-    pub fn removeItem(self: *Container, slot: u32, amount: u16) ?ItemStack {
+    pub fn removeItem(self: *Container, slot: u32, amount: u16) void {
         const idx = slot % self.getSize();
-        const item = &(self.storage[idx] orelse return null);
+        const item = &(self.storage[idx] orelse return);
         const removed = @min(amount, item.stackSize);
         item.stackSize -= removed;
         if (item.stackSize == 0) {
+            item.deinit();
             self.storage[idx] = null;
         }
         self.updateSlot(idx);
-        return ItemStack.init(self.allocator, item.item_type, .{ .stackSize = removed, .metadata = item.metadata, .nbt = item.nbt });
     }
 
     pub fn takeItem(self: *Container, slot: u32, amount: u16) ?ItemStack {
@@ -144,7 +144,7 @@ pub const Container = struct {
         }
         self.storage[idx].?.stackSize -= amount;
         self.updateSlot(idx);
-        return ItemStack.init(self.allocator, item.item_type, .{ .stackSize = amount, .metadata = item.metadata, .nbt = item.nbt });
+        return ItemStack.init(self.allocator, item.item_type, .{ .stackSize = amount, .metadata = item.metadata });
     }
 
     pub fn swapItems(self: *Container, slot: u32, other_slot: u32, other_container: ?*Container) void {

@@ -43,7 +43,7 @@ pub fn handlePlayerAction(
 
             try dimension.setPermutation(pos, permutation, 0);
 
-            _ = inv_state.container.base.removeItem(inv_state.selected_slot, 1);
+            inv_state.container.base.removeItem(inv_state.selected_slot, 1);
 
             const network_id: u32 = @bitCast(permutation.network_id);
             const snapshots = network.conduit.getPlayerSnapshots();

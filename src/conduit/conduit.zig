@@ -229,13 +229,12 @@ pub const Conduit = struct {
     }
 
     pub fn deinit(self: *Conduit) void {
-        self.raknet.deinit();
-
-        deinitRegistries();
-        ItemPalette.deinitRegistry();
-        EntityTypeRegistry.EntityTypeRegistry.deinit();
-        if (self.creative_content) |*cc| cc.deinit();
-        self.config.deinit();
+        self.raknet.running = false;
+        self.raknet.socket.stop();
+        if (self.raknet.tick_thread) |thread| {
+            thread.join();
+            self.raknet.tick_thread = null;
+        }
 
         var it = self.players.valueIterator();
         while (it.next()) |player| {
@@ -253,6 +252,13 @@ pub const Conduit = struct {
         }
         self.worlds.deinit();
 
+        self.raknet.deinit();
+
+        deinitRegistries();
+        ItemPalette.deinitRegistry();
+        EntityTypeRegistry.EntityTypeRegistry.deinit();
+        if (self.creative_content) |*cc| cc.deinit();
+        self.config.deinit();
         self.events.deinit();
         self.network.deinit();
         self.tasks.deinit();
