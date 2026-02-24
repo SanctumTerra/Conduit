@@ -23,6 +23,7 @@ const handlePacketViolationWarning = @import("./handlers/packet-violation-warnin
 const handleContainerClose = @import("./handlers/container-close.zig").handleContainerClose;
 const handleInventoryTransaction = @import("./handlers/inventory-transaction.zig").handleInventoryTransaction;
 const handleItemStackRequest = @import("./handlers/item-stack-request.zig").handleItemStackRequest;
+const handlePlayerAction = @import("./handlers/player-action.zig").handlePlayerAction;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
@@ -176,6 +177,13 @@ pub const NetworkHandler = struct {
                     &stream,
                 ) catch |err| {
                     Raknet.Logger.ERROR("ItemStackRequest error: {any}", .{err});
+                },
+                Packet.PlayerAction => handlePlayerAction(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("PlayerAction error: {any}", .{err});
                 },
                 Packet.PacketViolationWarning => handlePacketViolationWarning(
                     self,

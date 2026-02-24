@@ -43,6 +43,7 @@ pub const World = struct {
 
         const dim = try self.allocator.create(Dimension);
         dim.* = Dimension.init(self, self.allocator, identifier, dimension_type, generator);
+        try dim.loadSpawnChunks();
         try self.dimensions.put(identifier, dim);
         return dim;
     }

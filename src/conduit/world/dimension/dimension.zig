@@ -24,6 +24,7 @@ pub const Dimension = struct {
     chunks: std.AutoHashMap(ChunkHash, *Chunk),
     entities: std.AutoHashMap(i64, *Entity),
     spawn_position: Protocol.BlockPosition,
+    simulation_distance: i32,
     generator: ?*ThreadedGenerator,
 
     pub fn init(
@@ -45,6 +46,7 @@ pub const Dimension = struct {
                 .y = 32767,
                 .z = 0,
             },
+            .simulation_distance = 4,
             .generator = generator,
         };
     }
@@ -98,7 +100,15 @@ pub const Dimension = struct {
     pub fn releaseUnrenderedChunks(self: *Dimension, hashes: []const i64) void {
         const conduit = self.world.conduit;
         const snapshots = conduit.getPlayerSnapshots();
+        const spawn_cx = self.spawn_position.x >> 4;
+        const spawn_cz = self.spawn_position.z >> 4;
+        const sim = self.simulation_distance;
         for (hashes) |h| {
+            const coords = Protocol.ChunkCoords.unhash(h);
+            const dx = coords.x - spawn_cx;
+            const dz = coords.z - spawn_cz;
+            if (dx * dx + dz * dz <= sim * sim) continue;
+
             var still_needed = false;
             for (snapshots) |player| {
                 if (player.sent_chunks.contains(h)) {
@@ -131,7 +141,21 @@ pub const Dimension = struct {
     }
 
     pub fn getBlock(self: *Dimension, pos: Protocol.BlockPosition) Block {
-        return Block.init(self, pos);
+        return Block.init(self.allocator, self, pos);
+    }
+
+    pub fn loadSpawnChunks(self: *Dimension) !void {
+        const spawn_cx = self.spawn_position.x >> 4;
+        const spawn_cz = self.spawn_position.z >> 4;
+        const sim = self.simulation_distance;
+        var cx: i32 = spawn_cx - sim;
+        while (cx <= spawn_cx + sim) : (cx += 1) {
+            var cz: i32 = spawn_cz - sim;
+            while (cz <= spawn_cz + sim) : (cz += 1) {
+                if ((cx - spawn_cx) * (cx - spawn_cx) + (cz - spawn_cz) * (cz - spawn_cz) > sim * sim) continue;
+                _ = try self.getOrCreateChunk(cx, cz);
+            }
+        }
     }
 
     pub fn getEntity(self: *Dimension, runtime_id: i64) ?*Entity {

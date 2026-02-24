@@ -134,6 +134,24 @@ pub const Player = struct {
             s.container.setItem(0, item);
             s.container.update();
         }
+        if (self.entity.getTraitState(InventoryTrait)) |state| {
+            var s: *InventoryTrait.TraitState = state;
+
+            var item = ItemStack.fromIdentifier(
+                self.entity.allocator,
+                "minecraft:dirt",
+                .{
+                    .stackSize = 32,
+                },
+            ) orelse return;
+
+            const display = try DisplayTrait.create(self.entity.allocator, .{});
+            try item.addTrait(display);
+            try Display.setDisplayName(&item, "§r§2Dirt");
+
+            s.container.setItem(1, item);
+            s.container.update();
+        }
 
         {
             const EntityTypeRegistry = @import("../entity/entity-type-registry.zig").EntityTypeRegistry;

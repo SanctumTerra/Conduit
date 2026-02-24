@@ -6,6 +6,9 @@ pub const BlockState = @import("./block-permutation.zig").BlockState;
 pub const BlockPermutation = @import("./block-permutation.zig").BlockPermutation;
 pub const BlockType = @import("./block-type.zig").BlockType;
 pub const Block = @import("./block.zig").Block;
+pub const BlockTrait = @import("./traits/trait.zig").BlockTrait;
+pub const BlockTraitInstance = @import("./traits/trait.zig").BlockTraitInstance;
+pub const BlockTraitEvent = @import("./traits/trait.zig").Event;
 
 pub fn loadBlockPermutations(allocator: std.mem.Allocator) !usize {
     var loader = Data.BlockPermutationLoader.init(allocator);

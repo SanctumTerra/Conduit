@@ -1,4 +1,6 @@
+const Protocol = @import("protocol");
 const Player = @import("../player/player.zig").Player;
+const BlockPermutation = @import("../world/block/block-permutation.zig").BlockPermutation;
 
 pub const ServerStartEvent = struct {};
 pub const ServerShutdownEvent = struct {};
@@ -16,11 +18,18 @@ pub const PlayerChatEvent = struct {
     message: []const u8,
 };
 
+pub const BlockPlaceEvent = struct {
+    player: *Player,
+    position: Protocol.BlockPosition,
+    permutation: *BlockPermutation,
+};
+
 pub const Event = enum {
     ServerStart,
     ServerShutdown,
     PlayerJoin,
     PlayerChat,
+    BlockPlace,
 
     pub fn DataType(comptime event: Event) type {
         return switch (event) {
@@ -28,6 +37,7 @@ pub const Event = enum {
             .ServerShutdown => ServerShutdownEvent,
             .PlayerJoin => PlayerJoinEvent,
             .PlayerChat => PlayerChatEvent,
+            .BlockPlace => BlockPlaceEvent,
         };
     }
 };
