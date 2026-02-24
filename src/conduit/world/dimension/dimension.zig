@@ -23,6 +23,7 @@ pub const Dimension = struct {
     dimension_type: Protocol.DimensionType,
     chunks: std.AutoHashMap(ChunkHash, *Chunk),
     entities: std.AutoHashMap(i64, *Entity),
+    blocks: std.AutoHashMap(i64, *Block),
     spawn_position: Protocol.BlockPosition,
     simulation_distance: i32,
     generator: ?*ThreadedGenerator,
@@ -41,6 +42,7 @@ pub const Dimension = struct {
             .dimension_type = dimension_type,
             .chunks = std.AutoHashMap(ChunkHash, *Chunk).init(allocator),
             .entities = std.AutoHashMap(i64, *Entity).init(allocator),
+            .blocks = std.AutoHashMap(i64, *Block).init(allocator),
             .spawn_position = Protocol.BlockPosition{
                 .x = 0,
                 .y = 32767,
@@ -52,6 +54,13 @@ pub const Dimension = struct {
     }
 
     pub fn deinit(self: *Dimension) void {
+        var block_iter = self.blocks.valueIterator();
+        while (block_iter.next()) |block| {
+            block.*.deinit();
+            self.allocator.destroy(block.*);
+        }
+        self.blocks.deinit();
+
         var entity_iter = self.entities.valueIterator();
         while (entity_iter.next()) |entity| {
             entity.*.deinit();
@@ -141,7 +150,32 @@ pub const Dimension = struct {
     }
 
     pub fn getBlock(self: *Dimension, pos: Protocol.BlockPosition) Block {
+        if (self.blocks.get(blockPosHash(pos))) |block| return block.*;
         return Block.init(self.allocator, self, pos);
+    }
+
+    pub fn getBlockPtr(self: *Dimension, pos: Protocol.BlockPosition) ?*Block {
+        return self.blocks.get(blockPosHash(pos));
+    }
+
+    pub fn storeBlock(self: *Dimension, block: *Block) !void {
+        try self.blocks.put(blockPosHash(block.position), block);
+    }
+
+    pub fn removeBlock(self: *Dimension, pos: Protocol.BlockPosition) void {
+        const hash = blockPosHash(pos);
+        if (self.blocks.fetchRemove(hash)) |entry| {
+            var block = entry.value;
+            block.deinit();
+            self.allocator.destroy(block);
+        }
+    }
+
+    fn blockPosHash(pos: Protocol.BlockPosition) i64 {
+        const x: i64 = @intCast(pos.x);
+        const y: i64 = @intCast(pos.y);
+        const z: i64 = @intCast(pos.z);
+        return (x & 0x3FFFFFF) | ((z & 0x3FFFFFF) << 26) | ((y & 0xFFF) << 52);
     }
 
     pub fn loadSpawnChunks(self: *Dimension) !void {

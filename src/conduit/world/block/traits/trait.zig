@@ -74,7 +74,9 @@ pub const BlockTraitInstance = struct {
 pub fn BlockTrait(comptime State: type, comptime config: BlockTraitConfig(State)) type {
     return struct {
         pub const identifier = config.identifier;
+        pub const blocks = config.blocks;
         pub const TraitState = State;
+        pub const default_state: State = .{};
 
         pub const vtable = blk: {
             var vt = buildVTable(State, config);
@@ -95,6 +97,16 @@ pub fn BlockTrait(comptime State: type, comptime config: BlockTraitConfig(State)
                 .ctx = @ptrCast(state),
                 .identifier = identifier,
             };
+        }
+
+        fn defaultFactory(allocator: std.mem.Allocator) !BlockTraitInstance {
+            return create(allocator, default_state);
+        }
+
+        pub fn register() !void {
+            if (blocks.len > 0) {
+                try registerTraitForBlocks(blocks, &defaultFactory);
+            }
         }
 
         pub fn destroy(instance: BlockTraitInstance, allocator: std.mem.Allocator) void {
@@ -167,6 +179,7 @@ fn eventFromFieldName(comptime name: []const u8) ?Event {
 pub fn BlockTraitConfig(comptime State: type) type {
     return struct {
         identifier: []const u8,
+        blocks: []const []const u8 = &.{},
         onAttach: ?*const fn (*State, *Block) void = null,
         onDetach: ?*const fn (*State, *Block) void = null,
         onTick: ?*const fn (*State, *Block) void = null,
@@ -177,4 +190,55 @@ pub fn BlockTraitConfig(comptime State: type) type {
         onSerialize: ?*const fn (*State, *CompoundTag) void = null,
         onDeserialize: ?*const fn (*State, *const CompoundTag) void = null,
     };
+}
+
+pub const TraitFactory = *const fn (std.mem.Allocator) error{OutOfMemory}!BlockTraitInstance;
+
+const FactoryList = std.ArrayListUnmanaged(TraitFactory);
+
+var trait_registry: std.StringHashMapUnmanaged(FactoryList) = .{};
+var registry_allocator: std.mem.Allocator = undefined;
+var registry_initialized: bool = false;
+
+pub fn initTraitRegistry(allocator: std.mem.Allocator) void {
+    registry_allocator = allocator;
+    trait_registry = .{};
+    registry_initialized = true;
+}
+
+pub fn deinitTraitRegistry() void {
+    if (!registry_initialized) return;
+    var iter = trait_registry.valueIterator();
+    while (iter.next()) |list| {
+        list.deinit(registry_allocator);
+    }
+    trait_registry.deinit(registry_allocator);
+    registry_initialized = false;
+}
+
+pub fn registerTraitForBlocks(comptime blocks: []const []const u8, factory: TraitFactory) !void {
+    inline for (blocks) |block_id| {
+        const gop = try trait_registry.getOrPut(registry_allocator, block_id);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{};
+        }
+        try gop.value_ptr.append(registry_allocator, factory);
+    }
+}
+
+const Dimension = @import("../../../world/dimension/dimension.zig").Dimension;
+
+pub fn applyTraitsForBlock(allocator: std.mem.Allocator, dimension: *Dimension, position: @import("protocol").BlockPosition) !void {
+    if (!registry_initialized) return;
+    var temp = Block.init(allocator, dimension, position);
+    const identifier = temp.getIdentifier();
+    const factories = trait_registry.get(identifier) orelse return;
+
+    const block = try allocator.create(Block);
+    block.* = Block.init(allocator, dimension, position);
+    for (factories.items) |factory| {
+        const instance = try factory(allocator);
+        try block.addTrait(instance);
+    }
+    try dimension.storeBlock(block);
 }

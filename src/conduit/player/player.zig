@@ -153,6 +153,25 @@ pub const Player = struct {
             s.container.update();
         }
 
+        if (self.entity.getTraitState(InventoryTrait)) |state| {
+            var s: *InventoryTrait.TraitState = state;
+
+            var item = ItemStack.fromIdentifier(
+                self.entity.allocator,
+                "minecraft:chest",
+                .{
+                    .stackSize = 32,
+                },
+            ) orelse return;
+
+            const display = try DisplayTrait.create(self.entity.allocator, .{});
+            try item.addTrait(display);
+            try Display.setDisplayName(&item, "§r§cChest");
+
+            s.container.setItem(2, item);
+            s.container.update();
+        }
+
         {
             const EntityTypeRegistry = @import("../entity/entity-type-registry.zig").EntityTypeRegistry;
             const GravityTrait = @import("../entity/traits/gravity.zig").GravityTrait;

@@ -15,6 +15,7 @@ const Entity = @import("./entity/entity.zig").Entity;
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
+const ChestTrait = @import("./world/block/traits/chest.zig").ChestTrait;
 
 const ItemPalette = @import("./items/item-palette.zig");
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
@@ -75,6 +76,8 @@ pub const Conduit = struct {
 
     pub fn start(self: *Conduit) !void {
         try initRegistries(self.allocator);
+        // TODO: Implement registerTrait instead of trait.register()
+        try ChestTrait.register();
         const count = try loadBlockPermutations(self.allocator);
         Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
 

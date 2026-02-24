@@ -10,13 +10,17 @@ fn resolveContainer(
     inv_state: *InventoryTrait.TraitState,
     cursor_state: *CursorTrait.TraitState,
     container_name: Protocol.ContainerName,
+    player: *@import("../../player/player.zig").Player,
 ) ?*Container {
     return switch (container_name) {
         .Hotbar, .Inventory, .HotbarAndInventory => &inv_state.container.base,
         .Cursor => &cursor_state.container.base,
+        .Container, .Barrel, .Shulker => player.opened_container,
         else => null,
     };
 }
+
+// TODO: Handle inventory transactions more accordingly to avoid client predicted issues
 
 pub fn handleItemStackRequest(
     network: *NetworkHandler,
@@ -34,8 +38,8 @@ pub fn handleItemStackRequest(
         for (request.actions) |action| {
             switch (action) {
                 .take, .place => |t| {
-                    const src = resolveContainer(inv_state, cursor_state, t.source.container.identifier) orelse continue;
-                    const dst = resolveContainer(inv_state, cursor_state, t.destination.container.identifier) orelse continue;
+                    const src = resolveContainer(inv_state, cursor_state, t.source.container.identifier, player) orelse continue;
+                    const dst = resolveContainer(inv_state, cursor_state, t.destination.container.identifier, player) orelse continue;
 
                     const item = src.takeItem(t.source.slot, t.count) orelse continue;
 
@@ -46,16 +50,16 @@ pub fn handleItemStackRequest(
                     dst.setItem(t.destination.slot, item);
                 },
                 .swap => |s| {
-                    const src = resolveContainer(inv_state, cursor_state, s.source.container.identifier) orelse continue;
-                    const dst = resolveContainer(inv_state, cursor_state, s.destination.container.identifier) orelse continue;
+                    const src = resolveContainer(inv_state, cursor_state, s.source.container.identifier, player) orelse continue;
+                    const dst = resolveContainer(inv_state, cursor_state, s.destination.container.identifier, player) orelse continue;
                     src.swapItems(s.source.slot, s.destination.slot, dst);
                 },
                 .drop => |d| {
-                    const src = resolveContainer(inv_state, cursor_state, d.source.container.identifier) orelse continue;
+                    const src = resolveContainer(inv_state, cursor_state, d.source.container.identifier, player) orelse continue;
                     src.clearSlot(d.source.slot);
                 },
                 .destroy, .consume => |d| {
-                    const src = resolveContainer(inv_state, cursor_state, d.source.container.identifier) orelse continue;
+                    const src = resolveContainer(inv_state, cursor_state, d.source.container.identifier, player) orelse continue;
                     src.clearSlot(d.source.slot);
                 },
                 else => |a| {
@@ -66,5 +70,6 @@ pub fn handleItemStackRequest(
 
         inv_state.container.sendContentUpdate();
         cursor_state.container.sendContentUpdate();
+        if (player.opened_container) |opened| opened.update();
     }
 }

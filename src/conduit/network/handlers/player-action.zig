@@ -5,6 +5,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
+const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
 const Events = @import("../../events/types.zig");
 
 pub fn handlePlayerAction(
@@ -19,6 +20,13 @@ pub fn handlePlayerAction(
         .Respawn => {},
         .DimensionChangeDone => {},
         .StartItemUseOn => {
+            const world = network.conduit.getWorld("world") orelse return;
+            const dimension = world.getDimension("overworld") orelse return;
+
+            if (dimension.getBlockPtr(packet.blockPosition)) |clicked_block| {
+                if (!clicked_block.fireEvent(.Interact, .{ clicked_block, player })) return;
+            }
+
             const inv_state = player.entity.getTraitState(InventoryTrait.InventoryTrait) orelse return;
             const held = InventoryTrait.getHeldItem(inv_state) orelse return;
 
@@ -27,8 +35,6 @@ pub fn handlePlayerAction(
 
             if (std.mem.eql(u8, permutation.identifier, "minecraft:air")) return;
 
-            const world = network.conduit.getWorld("world") orelse return;
-            const dimension = world.getDimension("overworld") orelse return;
             const pos = packet.resultPosition;
 
             var block = dimension.getBlock(pos);
@@ -42,6 +48,8 @@ pub fn handlePlayerAction(
             if (!network.conduit.events.emit(.BlockPlace, &place_event)) return;
 
             try dimension.setPermutation(pos, permutation, 0);
+
+            try applyTraitsForBlock(player.entity.allocator, dimension, pos);
 
             inv_state.container.base.removeItem(inv_state.selected_slot, 1);
 

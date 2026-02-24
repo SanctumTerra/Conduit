@@ -8,6 +8,7 @@ const Player = @import("../player/player.zig").Player;
 // TODO: Add Block reference once Block struct is implemented
 pub const BlockContainer = struct {
     base: Container,
+    position: ?Protocol.BlockPosition = null,
 
     pub fn init(allocator: std.mem.Allocator, container_type: Protocol.ContainerType, size: u32) !BlockContainer {
         return .{
@@ -40,24 +41,24 @@ pub const BlockContainer = struct {
         // TODO: call onContainerUpdate for block traits once Block is implemented
     }
 
-    pub fn show(self: *BlockContainer, player: *Player) Protocol.ContainerId {
+    pub fn show(self: *BlockContainer, player: *Player, position: Protocol.BlockPosition) Protocol.ContainerId {
+        self.position = position;
         const id = self.base.show(player);
         if (id == .None) return .None;
 
         var stream = BinaryStream.init(self.base.allocator, null, null);
         defer stream.deinit();
 
-        // TODO: use actual block position once Block struct is available
         const packet = Protocol.ContainerOpenPacket{
             .identifier = id,
             .container_type = self.base.container_type,
-            .position = Protocol.BlockPosition{ .x = 0, .y = 0, .z = 0 },
-            .unique_id = if (self.base.container_type == .Container) -1 else player.entity.runtime_id,
+            .position = position,
+            .unique_id = -1,
         };
         const serialized = packet.serialize(&stream) catch return id;
         player.network.sendPacket(player.connection, serialized) catch {};
 
-        self.update();
+        self.base.update();
         return id;
     }
 };

@@ -8,4 +8,5 @@ pub const ContainerId = enum(i8) {
     SelectionSlots = 122,
     Ui = 124,
     Registry = 125,
+    _,
 };
