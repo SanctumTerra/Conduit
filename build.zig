@@ -1,5 +1,44 @@
 const std = @import("std");
 
+const leveldb_sources = &[_][]const u8{
+    "db/builder.cc",
+    "db/c.cc",
+    "db/db_impl.cc",
+    "db/db_iter.cc",
+    "db/dbformat.cc",
+    "db/dumpfile.cc",
+    "db/filename.cc",
+    "db/log_reader.cc",
+    "db/log_writer.cc",
+    "db/memtable.cc",
+    "db/repair.cc",
+    "db/table_cache.cc",
+    "db/version_edit.cc",
+    "db/version_set.cc",
+    "db/write_batch.cc",
+    "table/block_builder.cc",
+    "table/block.cc",
+    "table/filter_block.cc",
+    "table/format.cc",
+    "table/iterator.cc",
+    "table/merger.cc",
+    "table/table_builder.cc",
+    "table/table.cc",
+    "table/two_level_iterator.cc",
+    "util/arena.cc",
+    "util/bloom.cc",
+    "util/cache.cc",
+    "util/coding.cc",
+    "util/comparator.cc",
+    "util/crc32c.cc",
+    "util/env.cc",
+    "util/filter_policy.cc",
+    "util/hash.cc",
+    "util/logging.cc",
+    "util/options.cc",
+    "util/status.cc",
+};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -14,6 +53,34 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    const is_windows = target.result.os.tag == .windows;
+
+    const leveldb_lib = b.addLibrary(.{
+        .name = "leveldb",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    leveldb_lib.addIncludePath(b.path("dump/leveldb-src"));
+    leveldb_lib.addIncludePath(b.path("dump/leveldb-src/include"));
+    leveldb_lib.linkLibCpp();
+    leveldb_lib.linkLibrary(zlib_dep.artifact("z"));
+
+    const platform_flags: []const []const u8 = if (is_windows)
+        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_WINDOWS", "-D_UNICODE", "-DUNICODE", "-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX" }
+    else
+        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FDATASYNC=1", "-DHAVE_O_CLOEXEC=1" };
+
+    for (leveldb_sources) |src| {
+        leveldb_lib.addCSourceFile(.{ .file = b.path(b.fmt("dump/leveldb-src/{s}", .{src})), .flags = platform_flags });
+    }
+
+    const env_file: []const u8 = if (is_windows) "util/env_windows.cc" else "util/env_posix.cc";
+    leveldb_lib.addCSourceFile(.{ .file = b.path(b.fmt("dump/leveldb-src/{s}", .{env_file})), .flags = platform_flags });
 
     const nbt_mod = b.addModule("nbt", .{
         .root_source_file = b.path("src/nbt/root.zig"),
@@ -43,7 +110,7 @@ pub fn build(b: *std.Build) void {
     conduit_mod.addImport("nbt", nbt_mod);
     conduit_mod.addImport("leveldb", leveldb_mod);
     conduit_mod.linkLibrary(zlib_dep.artifact("z"));
-    if (target.result.os.tag == .windows) {
+    if (is_windows) {
         conduit_mod.linkSystemLibrary("psapi", .{});
     }
 
@@ -63,8 +130,7 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.linkLibrary(zlib_dep.artifact("z"));
-    exe.addLibraryPath(b.path("libs/leveldb/lib"));
-    exe.linkSystemLibrary("leveldb");
+    exe.linkLibrary(leveldb_lib);
     exe.linkLibCpp();
 
     b.installArtifact(exe);
