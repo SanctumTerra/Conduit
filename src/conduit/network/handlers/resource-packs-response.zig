@@ -42,7 +42,20 @@ pub fn handleResourcePack(
 
         .Completed => {
             if (network.conduit.getPlayerByConnection(connection)) |player| {
-                // StartGamePacket
+                const loaded = player.loadPlayerData();
+
+                const world = network.conduit.getWorld("world");
+                const dimension = if (world) |w| w.getDimension("overworld") else null;
+                const spawn_pos = if (dimension) |dim| dim.spawn_position else Protocol.BlockPosition.init(0, 100, 0);
+
+                if (!loaded) {
+                    player.entity.position = Protocol.Vector3f.init(
+                        @floatFromInt(spawn_pos.x),
+                        @floatFromInt(spawn_pos.y),
+                        @floatFromInt(spawn_pos.z),
+                    );
+                }
+
                 {
                     var str = BinaryStream.init(network.allocator, null, null);
                     defer str.deinit();
@@ -62,9 +75,9 @@ pub fn handleResourcePack(
                         .entityId = entity_id,
                         .runtimeEntityId = runtime_entity_id,
                         .playerGamemode = .Creative,
-                        .playerPosition = Protocol.Vector3f.init(0, -58, 0),
-                        .pitch = 0.0,
-                        .yaw = 0.0,
+                        .playerPosition = player.entity.position,
+                        .pitch = player.entity.rotation.y,
+                        .yaw = player.entity.rotation.x,
                         .seed = 12345678,
                         .biomeType = 0,
                         .biomeName = "plains",
@@ -73,7 +86,7 @@ pub fn handleResourcePack(
                         .worldGamemode = .Survival,
                         .hardcore = false,
                         .difficulty = .Normal,
-                        .spawnPosition = Protocol.BlockPosition.init(0, 100, 0),
+                        .spawnPosition = spawn_pos,
                         .achievementsDisabled = true,
                         .editorWorldType = 0,
                         .createdInEditor = false,

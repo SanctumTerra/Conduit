@@ -10,6 +10,7 @@ pub const WorldProvider = struct {
 
     pub const VTable = struct {
         readChunk: *const fn (ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) anyerror!*Chunk,
+        readChunkDirect: ?*const fn (ptr: *anyopaque, x: i32, z: i32, dim_type: @import("protocol").DimensionType) anyerror!*Chunk,
         writeChunk: *const fn (ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void,
         uncacheChunk: ?*const fn (ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) void,
         readBuffer: *const fn (ptr: *anyopaque, key: []const u8) anyerror!?[]const u8,
@@ -22,6 +23,11 @@ pub const WorldProvider = struct {
 
     pub fn readChunk(self: WorldProvider, x: i32, z: i32, dimension: *Dimension) !*Chunk {
         return self.vtable.readChunk(self.ptr, x, z, dimension);
+    }
+
+    pub fn readChunkDirect(self: WorldProvider, x: i32, z: i32, dim_type: @import("protocol").DimensionType) !*Chunk {
+        if (self.vtable.readChunkDirect) |f| return f(self.ptr, x, z, dim_type);
+        return error.NotSupported;
     }
 
     pub fn writeChunk(self: WorldProvider, chunk: *Chunk, dimension: *Dimension) !void {

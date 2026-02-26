@@ -194,6 +194,8 @@ pub const NetworkHandler = struct {
                 },
                 Packet.EmoteList,
                 Packet.ServerboundLoadingScreenPacket,
+                Packet.SetPlayerInventoryOptions,
+                Packet.BlockPickRequest,
                 => {},
                 else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
             }

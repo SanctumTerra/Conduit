@@ -164,7 +164,13 @@ pub const Dimension = struct {
     }
 
     pub fn storeBlock(self: *Dimension, block: *Block) !void {
-        try self.blocks.put(blockPosHash(block.position), block);
+        const hash = blockPosHash(block.position);
+        if (self.blocks.fetchRemove(hash)) |entry| {
+            var old = entry.value;
+            old.deinit();
+            self.allocator.destroy(old);
+        }
+        try self.blocks.put(hash, block);
     }
 
     pub fn removeBlock(self: *Dimension, pos: Protocol.BlockPosition) void {

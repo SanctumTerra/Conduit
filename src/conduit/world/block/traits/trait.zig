@@ -109,6 +109,10 @@ pub fn BlockTrait(comptime State: type, comptime config: BlockTraitConfig(State)
             }
         }
 
+        pub fn registerForState(state_key: []const u8) !void {
+            try registerDynamicTrait(state_key, &defaultFactory);
+        }
+
         pub fn destroy(instance: BlockTraitInstance, allocator: std.mem.Allocator) void {
             const state: *State = @ptrCast(@alignCast(instance.ctx));
             allocator.destroy(state);
@@ -193,16 +197,22 @@ pub fn BlockTraitConfig(comptime State: type) type {
 }
 
 pub const TraitFactory = *const fn (std.mem.Allocator) error{OutOfMemory}!BlockTraitInstance;
+pub const DynamicTraitEntry = struct {
+    state_key: []const u8,
+    factory: TraitFactory,
+};
 
 const FactoryList = std.ArrayListUnmanaged(TraitFactory);
 
 var trait_registry: std.StringHashMapUnmanaged(FactoryList) = .{};
+var dynamic_traits: std.ArrayListUnmanaged(DynamicTraitEntry) = .{};
 var registry_allocator: std.mem.Allocator = undefined;
 var registry_initialized: bool = false;
 
 pub fn initTraitRegistry(allocator: std.mem.Allocator) void {
     registry_allocator = allocator;
     trait_registry = .{};
+    dynamic_traits = .{};
     registry_initialized = true;
 }
 
@@ -213,6 +223,7 @@ pub fn deinitTraitRegistry() void {
         list.deinit(registry_allocator);
     }
     trait_registry.deinit(registry_allocator);
+    dynamic_traits.deinit(registry_allocator);
     registry_initialized = false;
 }
 
@@ -226,19 +237,41 @@ pub fn registerTraitForBlocks(comptime blocks: []const []const u8, factory: Trai
     }
 }
 
+pub fn registerDynamicTrait(state_key: []const u8, factory: TraitFactory) !void {
+    try dynamic_traits.append(registry_allocator, .{ .state_key = state_key, .factory = factory });
+}
+
 const Dimension = @import("../../../world/dimension/dimension.zig").Dimension;
 
 pub fn applyTraitsForBlock(allocator: std.mem.Allocator, dimension: *Dimension, position: @import("protocol").BlockPosition) !void {
     if (!registry_initialized) return;
     var temp = Block.init(allocator, dimension, position);
     const identifier = temp.getIdentifier();
-    const factories = trait_registry.get(identifier) orelse return;
+    const perm = temp.getPermutation(0) catch null;
+
+    const static_factories = trait_registry.get(identifier);
+    const has_dynamic = perm != null and dynamic_traits.items.len > 0;
+
+    if (static_factories == null and !has_dynamic) return;
 
     const block = try allocator.create(Block);
     block.* = Block.init(allocator, dimension, position);
-    for (factories.items) |factory| {
-        const instance = try factory(allocator);
-        try block.addTrait(instance);
+
+    if (static_factories) |factories| {
+        for (factories.items) |factory| {
+            const instance = try factory(allocator);
+            try block.addTrait(instance);
+        }
     }
+
+    if (perm) |p| {
+        for (dynamic_traits.items) |entry| {
+            if (p.state.contains(entry.state_key)) {
+                const instance = try entry.factory(allocator);
+                try block.addTrait(instance);
+            }
+        }
+    }
+
     try dimension.storeBlock(block);
 }

@@ -223,12 +223,52 @@ pub const LevelDBProvider = struct {
         try self.db.put(key, buffer);
     }
 
+    pub fn readChunkDirect(self: *LevelDBProvider, x: i32, z: i32, dim_type: @import("protocol").DimensionType) !*Chunk {
+        const read_opts = LevelDB.DB.createReadOptions() orelse return error.Failed;
+        defer LevelDB.DB.destroyReadOptions(read_opts);
+
+        const dim_index: i32 = switch (dim_type) {
+            .Overworld => 0,
+            .Nether => 1,
+            .End => 2,
+        };
+
+        const ver_key = versionKey(x, z, dim_index);
+        const ver_data = self.db.getWithOpts(ver_key.slice(), read_opts) orelse blk: {
+            const old_key = versionKeyOld(x, z, dim_index);
+            break :blk self.db.getWithOpts(old_key.slice(), read_opts) orelse return error.ChunkNotFound;
+        };
+        LevelDB.DB.freeValue(ver_data);
+
+        const chunk = try self.allocator.create(Chunk);
+        chunk.* = Chunk.init(self.allocator, x, z, dim_type);
+
+        const offset = chunk_mod.yOffset(dim_type);
+        for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
+            const sc_index: i8 = @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset)));
+            const key = subchunkKey(x, z, sc_index, dim_index);
+            if (self.db.getWithOpts(key.slice(), read_opts)) |data| {
+                defer LevelDB.DB.freeValue(data);
+                var stream = BinaryStream.init(self.allocator, data, null);
+                const sc = try self.allocator.create(SubChunk);
+                sc.* = SubChunk.deserialize(&stream, self.allocator) catch {
+                    self.allocator.destroy(sc);
+                    continue;
+                };
+                chunk.subchunks[i] = sc;
+            }
+        }
+
+        return chunk;
+    }
+
     pub fn asProvider(self: *LevelDBProvider) WorldProvider {
         return .{ .ptr = self, .vtable = &vtable };
     }
 
     const vtable = WorldProvider.VTable{
         .readChunk = vtableReadChunk,
+        .readChunkDirect = vtableReadChunkDirect,
         .writeChunk = vtableWriteChunk,
         .uncacheChunk = vtableUncacheChunk,
         .readBuffer = vtableReadBuffer,
@@ -242,6 +282,11 @@ pub const LevelDBProvider = struct {
     fn vtableReadChunk(ptr: *anyopaque, x: i32, z: i32, dimension: *Dimension) anyerror!*Chunk {
         const self: *LevelDBProvider = @ptrCast(@alignCast(ptr));
         return self.readChunk(x, z, dimension);
+    }
+
+    fn vtableReadChunkDirect(ptr: *anyopaque, x: i32, z: i32, dim_type: @import("protocol").DimensionType) anyerror!*Chunk {
+        const self: *LevelDBProvider = @ptrCast(@alignCast(ptr));
+        return self.readChunkDirect(x, z, dim_type);
     }
 
     fn vtableWriteChunk(ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void {

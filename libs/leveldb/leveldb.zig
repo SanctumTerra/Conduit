@@ -77,15 +77,27 @@ pub const DB = struct {
     }
 
     pub fn get(self: *DB, key: []const u8) ?[]const u8 {
+        return self.getWithOpts(key, self.read_opts);
+    }
+
+    pub fn getWithOpts(self: *DB, key: []const u8, opts: *c.leveldb_readoptions_t) ?[]const u8 {
         var vallen: usize = 0;
         var err: ?[*:0]u8 = null;
-        const val = c.leveldb_get(self.handle, self.read_opts, key.ptr, key.len, &vallen, &err);
+        const val = c.leveldb_get(self.handle, opts, key.ptr, key.len, &vallen, &err);
         if (err) |e| {
             c.leveldb_free(e);
             return null;
         }
         if (val == null) return null;
         return val.?[0..vallen];
+    }
+
+    pub fn createReadOptions() ?*c.leveldb_readoptions_t {
+        return c.leveldb_readoptions_create();
+    }
+
+    pub fn destroyReadOptions(opts: *c.leveldb_readoptions_t) void {
+        c.leveldb_readoptions_destroy(opts);
     }
 
     pub fn freeValue(value: []const u8) void {

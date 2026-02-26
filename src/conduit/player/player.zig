@@ -134,13 +134,9 @@ pub const Player = struct {
         };
         Raknet.Logger.INFO("Player {s} has spawned.", .{self.username});
 
-        const loaded = self.loadPlayerData();
-
-        if (loaded) {
-            if (self.entity.getTraitState(InventoryTrait)) |state| {
-                var s: *InventoryTrait.TraitState = state;
-                s.container.update();
-            }
+        if (self.entity.getTraitState(InventoryTrait)) |state| {
+            var s: *InventoryTrait.TraitState = state;
+            s.container.update();
         }
 
         if (self.entity.getTraitState(InventoryTrait)) |state| {

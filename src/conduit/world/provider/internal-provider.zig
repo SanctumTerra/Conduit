@@ -86,6 +86,7 @@ pub const InternalProvider = struct {
 
     const vtable = WorldProvider.VTable{
         .readChunk = vtableReadChunk,
+        .readChunkDirect = null,
         .writeChunk = vtableWriteChunk,
         .uncacheChunk = null,
         .readBuffer = vtableReadBuffer,

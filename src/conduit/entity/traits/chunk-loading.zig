@@ -6,7 +6,12 @@ const EntityTrait = @import("./trait.zig").EntityTrait;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const Conduit = @import("../../conduit.zig").Conduit;
-const Task = @import("../../tasks.zig").Task;
+const Chunk = @import("../../world/chunk/chunk.zig").Chunk;
+const Raknet = @import("Raknet");
+const ThreadedTask = @import("../../threaded-tasks.zig").ThreadedTask;
+const Compression = @import("../../network/compression/compression.zig").Compression;
+const CompressionOptions = @import("../../network/compression/options.zig").CompressionOptions;
+const WorldProvider = @import("../../world/provider/world-provider.zig").WorldProvider;
 
 pub const State = struct {
     last_chunk_x: i32,
@@ -68,6 +73,8 @@ const ChunkStreamState = struct {
     ring_idx: i32,
 };
 
+const BATCH_SIZE: usize = 16;
+
 pub fn queueChunkStreaming(player: *Player) !void {
     const conduit = player.network.conduit;
     const world = conduit.getWorld("world") orelse return;
@@ -125,6 +132,180 @@ pub fn destroyStreamState(ctx: *anyopaque) void {
     state.allocator.destroy(state);
 }
 
+const ChunkCoord = struct { x: i32, z: i32 };
+
+const ChunkBatchWork = struct {
+    cached_packets: [][]const u8,
+    cached_hashes: []i64,
+    cached_count: usize,
+    uncached_coords: []ChunkCoord,
+    uncached_hashes: []i64,
+    uncached_packets: [][]const u8,
+    uncached_chunks: []?*Chunk,
+    uncached_count: usize,
+    runtime_id: i64,
+    conduit: *Conduit,
+    allocator: std.mem.Allocator,
+    options: CompressionOptions,
+    provider: WorldProvider,
+    dim_type: Protocol.DimensionType,
+    generator: ?@import("../../world/generator/terrain-generator.zig").TerrainGenerator,
+};
+
+fn workerLoadAndCompress(ctx: *anyopaque) void {
+    const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
+    const allocator = work.allocator;
+
+    for (0..work.cached_count) |i| {
+        const pkt = work.cached_packets[i];
+        if (pkt.len == 0) continue;
+        const packets = [_][]const u8{pkt};
+        const compressed = Compression.compress(&packets, work.options, allocator) catch {
+            continue;
+        };
+        allocator.free(pkt);
+        work.cached_packets[i] = compressed;
+    }
+
+    for (0..work.uncached_count) |i| {
+        const coord = work.uncached_coords[i];
+        const chunk = work.provider.readChunkDirect(coord.x, coord.z, work.dim_type) catch blk: {
+            if (work.generator) |gen| {
+                break :blk gen.generate(allocator, coord.x, coord.z) catch {
+                    work.uncached_packets[i] = &.{};
+                    work.uncached_chunks[i] = null;
+                    continue;
+                };
+            } else {
+                work.uncached_packets[i] = &.{};
+                work.uncached_chunks[i] = null;
+                continue;
+            }
+        };
+
+        work.uncached_chunks[i] = chunk;
+
+        const pkt = serializeChunkPacket(allocator, chunk, coord.x, coord.z) orelse {
+            work.uncached_packets[i] = &.{};
+            continue;
+        };
+
+        const packets = [_][]const u8{pkt};
+        work.uncached_packets[i] = Compression.compress(&packets, work.options, allocator) catch {
+            allocator.free(pkt);
+            work.uncached_packets[i] = &.{};
+            continue;
+        };
+        allocator.free(pkt);
+    }
+}
+
+fn onBatchComplete(ctx: *anyopaque) void {
+    const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
+    const allocator = work.allocator;
+    defer {
+        allocator.free(work.cached_packets);
+        allocator.free(work.cached_hashes);
+        allocator.free(work.uncached_coords);
+        allocator.free(work.uncached_hashes);
+        allocator.free(work.uncached_packets);
+        allocator.free(work.uncached_chunks);
+        allocator.destroy(work);
+    }
+
+    const player = work.conduit.players.get(work.runtime_id) orelse {
+        for (work.cached_packets[0..work.cached_count]) |pkt| {
+            if (pkt.len > 0) allocator.free(pkt);
+        }
+        for (0..work.uncached_count) |i| {
+            if (work.uncached_packets[i].len > 0) allocator.free(work.uncached_packets[i]);
+            if (work.uncached_chunks[i]) |chunk| {
+                var c = chunk;
+                c.deinit();
+                allocator.destroy(c);
+            }
+        }
+        return;
+    };
+
+    for (work.cached_packets[0..work.cached_count], work.cached_hashes[0..work.cached_count]) |compressed, hash| {
+        if (compressed.len == 0) continue;
+        player.connection.sendReliableMessage(compressed, .Normal);
+        allocator.free(compressed);
+        player.sent_chunks.put(hash, {}) catch {};
+    }
+
+    const world = work.conduit.getWorld("world");
+    const dimension = if (world) |w| w.getDimension("overworld") else null;
+
+    for (0..work.uncached_count) |i| {
+        if (work.uncached_chunks[i]) |chunk| {
+            if (dimension) |dim| {
+                dim.chunks.put(@import("../../world/dimension/dimension.zig").chunkHash(chunk.x, chunk.z), chunk) catch {
+                    var c = chunk;
+                    c.deinit();
+                    allocator.destroy(c);
+                };
+            } else {
+                var c = chunk;
+                c.deinit();
+                allocator.destroy(c);
+            }
+        }
+        const compressed = work.uncached_packets[i];
+        if (compressed.len == 0) continue;
+        player.connection.sendReliableMessage(compressed, .Normal);
+        allocator.free(compressed);
+        player.sent_chunks.put(work.uncached_hashes[i], {}) catch {};
+    }
+}
+
+fn cleanupBatchWork(ctx: *anyopaque) void {
+    const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
+    const allocator = work.allocator;
+    for (work.cached_packets[0..work.cached_count]) |pkt| {
+        if (pkt.len > 0) allocator.free(pkt);
+    }
+    for (0..work.uncached_count) |i| {
+        if (work.uncached_packets[i].len > 0) allocator.free(work.uncached_packets[i]);
+        if (work.uncached_chunks[i]) |chunk| {
+            var c = chunk;
+            c.deinit();
+            allocator.destroy(c);
+        }
+    }
+    allocator.free(work.cached_packets);
+    allocator.free(work.cached_hashes);
+    allocator.free(work.uncached_coords);
+    allocator.free(work.uncached_hashes);
+    allocator.free(work.uncached_packets);
+    allocator.free(work.uncached_chunks);
+    allocator.destroy(work);
+}
+
+fn serializeChunkPacket(allocator: std.mem.Allocator, chunk: *Chunk, cx: i32, cz: i32) ?[]const u8 {
+    var chunk_stream = BinaryStream.init(allocator, null, null);
+    defer chunk_stream.deinit();
+    chunk.serialize(&chunk_stream) catch return null;
+
+    var pkt_stream = BinaryStream.init(allocator, null, null);
+    defer pkt_stream.deinit();
+
+    var level_chunk = Protocol.LevelChunkPacket{
+        .x = cx,
+        .z = cz,
+        .dimension = .Overworld,
+        .highestSubChunkCount = 0,
+        .subChunkCount = @intCast(chunk.getSubChunkSendCount()),
+        .cacheEnabled = false,
+        .blobs = &[_]u64{},
+        .data = chunk_stream.getBuffer(),
+    };
+
+    const serialized = level_chunk.serialize(&pkt_stream) catch return null;
+    return allocator.dupe(u8, serialized) catch null;
+}
+
 fn chunkStreamStep(ctx: *anyopaque) bool {
     const state: *ChunkStreamState = @ptrCast(@alignCast(ctx));
     const allocator = state.allocator;
@@ -143,19 +324,25 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
         return true;
     };
 
-    var did_load = false;
+    var cached_pkt_buf: [BATCH_SIZE][]const u8 = undefined;
+    var cached_hash_buf: [BATCH_SIZE]i64 = undefined;
+    var cached_count: usize = 0;
 
-    while (state.ring <= state.radius) {
+    var uncached_coord_buf: [BATCH_SIZE]ChunkCoord = undefined;
+    var uncached_hash_buf: [BATCH_SIZE]i64 = undefined;
+    var uncached_count: usize = 0;
+
+    var total_count: usize = 0;
+
+    while (state.ring <= state.radius and total_count < BATCH_SIZE) {
         const ring = state.ring;
         if (ring == 0) {
             state.ring = 1;
             state.ring_idx = 0;
             const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = state.center_x, .z = state.center_z });
             if (!player.sent_chunks.contains(chunk_hash)) {
-                const cached = dimension.getChunk(state.center_x, state.center_z) != null;
-                if (!cached and did_load) return false;
-                sendAndFlush(dimension, state.center_x, state.center_z, allocator, player);
-                if (!cached) did_load = true;
+                collectChunk(dimension, state.center_x, state.center_z, chunk_hash, allocator, &cached_pkt_buf, &cached_hash_buf, &cached_count, &uncached_coord_buf, &uncached_hash_buf, &uncached_count);
+                total_count += 1;
             }
             continue;
         }
@@ -177,40 +364,141 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
         const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = coords[0], .z = coords[1] });
         if (player.sent_chunks.contains(chunk_hash)) continue;
 
-        const cached = dimension.getChunk(coords[0], coords[1]) != null;
-        if (!cached and did_load) return false;
-        sendAndFlush(dimension, coords[0], coords[1], allocator, player);
-        if (!cached) did_load = true;
+        collectChunk(dimension, coords[0], coords[1], chunk_hash, allocator, &cached_pkt_buf, &cached_hash_buf, &cached_count, &uncached_coord_buf, &uncached_hash_buf, &uncached_count);
+        total_count += 1;
     }
 
-    allocator.destroy(state);
-    return true;
+    if (cached_count > 0 or uncached_count > 0) {
+        submitBatch(state, player, allocator, world, dimension, &cached_pkt_buf, &cached_hash_buf, cached_count, &uncached_coord_buf, &uncached_hash_buf, uncached_count);
+    }
+
+    if (state.ring > state.radius) {
+        allocator.destroy(state);
+        return true;
+    }
+    return false;
 }
 
-fn sendAndFlush(dimension: *Dimension, cx: i32, cz: i32, allocator: std.mem.Allocator, player: *Player) void {
-    const chunk = dimension.getOrCreateChunk(cx, cz) catch return;
+fn collectChunk(
+    dimension: *Dimension,
+    cx: i32,
+    cz: i32,
+    chunk_hash: i64,
+    allocator: std.mem.Allocator,
+    cached_pkt_buf: *[BATCH_SIZE][]const u8,
+    cached_hash_buf: *[BATCH_SIZE]i64,
+    cached_count: *usize,
+    uncached_coord_buf: *[BATCH_SIZE]ChunkCoord,
+    uncached_hash_buf: *[BATCH_SIZE]i64,
+    uncached_count: *usize,
+) void {
+    if (dimension.getChunk(cx, cz)) |chunk| {
+        if (serializeChunkPacket(allocator, chunk, cx, cz)) |pkt| {
+            cached_pkt_buf[cached_count.*] = pkt;
+            cached_hash_buf[cached_count.*] = chunk_hash;
+            cached_count.* += 1;
+        }
+    } else {
+        uncached_coord_buf[uncached_count.*] = .{ .x = cx, .z = cz };
+        uncached_hash_buf[uncached_count.*] = chunk_hash;
+        uncached_count.* += 1;
+    }
+}
 
-    var chunk_stream = BinaryStream.init(allocator, null, null);
-    defer chunk_stream.deinit();
-    chunk.serialize(&chunk_stream) catch return;
+fn submitBatch(
+    state: *ChunkStreamState,
+    player: *Player,
+    allocator: std.mem.Allocator,
+    world: *@import("../../world/world.zig").World,
+    dimension: *Dimension,
+    cached_pkt_buf: *[BATCH_SIZE][]const u8,
+    cached_hash_buf: *[BATCH_SIZE]i64,
+    cached_count: usize,
+    uncached_coord_buf: *[BATCH_SIZE]ChunkCoord,
+    uncached_hash_buf: *[BATCH_SIZE]i64,
+    uncached_count: usize,
+) void {
+    const work = allocator.create(ChunkBatchWork) catch return;
 
-    var pkt_stream = BinaryStream.init(allocator, null, null);
-    defer pkt_stream.deinit();
-
-    var level_chunk = Protocol.LevelChunkPacket{
-        .x = cx,
-        .z = cz,
-        .dimension = .Overworld,
-        .highestSubChunkCount = 0,
-        .subChunkCount = @intCast(chunk.getSubChunkSendCount()),
-        .cacheEnabled = false,
-        .blobs = &[_]u64{},
-        .data = chunk_stream.getBuffer(),
+    const cp = allocator.alloc([]const u8, cached_count) catch {
+        allocator.destroy(work);
+        return;
+    };
+    const ch = allocator.alloc(i64, cached_count) catch {
+        allocator.free(cp);
+        allocator.destroy(work);
+        return;
+    };
+    const uc = allocator.alloc(ChunkCoord, uncached_count) catch {
+        allocator.free(ch);
+        allocator.free(cp);
+        allocator.destroy(work);
+        return;
+    };
+    const uh = allocator.alloc(i64, uncached_count) catch {
+        allocator.free(uc);
+        allocator.free(ch);
+        allocator.free(cp);
+        allocator.destroy(work);
+        return;
+    };
+    const up = allocator.alloc([]const u8, uncached_count) catch {
+        allocator.free(uh);
+        allocator.free(uc);
+        allocator.free(ch);
+        allocator.free(cp);
+        allocator.destroy(work);
+        return;
+    };
+    const uchunks = allocator.alloc(?*Chunk, uncached_count) catch {
+        allocator.free(up);
+        allocator.free(uh);
+        allocator.free(uc);
+        allocator.free(ch);
+        allocator.free(cp);
+        allocator.destroy(work);
+        return;
     };
 
-    const serialized = level_chunk.serialize(&pkt_stream) catch return;
-    player.network.sendPacket(player.connection, serialized) catch {};
-    player.sent_chunks.put(Protocol.ChunkCoords.hash(.{ .x = cx, .z = cz }), {}) catch {};
+    for (0..cached_count) |i| {
+        cp[i] = cached_pkt_buf[i];
+        ch[i] = cached_hash_buf[i];
+        player.sent_chunks.put(ch[i], {}) catch {};
+    }
+    for (0..uncached_count) |i| {
+        uc[i] = uncached_coord_buf[i];
+        uh[i] = uncached_hash_buf[i];
+        up[i] = &.{};
+        uchunks[i] = null;
+        player.sent_chunks.put(uh[i], {}) catch {};
+    }
+
+    work.* = .{
+        .cached_packets = cp,
+        .cached_hashes = ch,
+        .cached_count = cached_count,
+        .uncached_coords = uc,
+        .uncached_hashes = uh,
+        .uncached_packets = up,
+        .uncached_chunks = uchunks,
+        .uncached_count = uncached_count,
+        .runtime_id = state.runtime_id,
+        .conduit = state.conduit,
+        .allocator = allocator,
+        .options = player.network.options,
+        .provider = world.provider,
+        .dim_type = .Overworld,
+        .generator = if (dimension.generator) |gen| gen.generator else null,
+    };
+
+    state.conduit.threaded_tasks.enqueue(.{
+        .work = workerLoadAndCompress,
+        .callback = onBatchComplete,
+        .cleanup = cleanupBatchWork,
+        .ctx = @ptrCast(work),
+    }) catch {
+        cleanupBatchWork(@ptrCast(work));
+    };
 }
 
 fn ringCoord(cx: i32, cz: i32, ring: i32, idx: i32) [2]i32 {

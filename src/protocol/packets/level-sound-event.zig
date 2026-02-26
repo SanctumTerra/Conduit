@@ -3,6 +3,12 @@ const Packet = @import("../enums/packet.zig").Packet;
 const Vector3f = @import("../types/vector3f.zig").Vector3f;
 
 pub const LevelSoundEvent = enum(u32) {
+    DoorOpen = 7,
+    DoorClose = 8,
+    TrapdoorOpen = 9,
+    TrapdoorClose = 10,
+    FenceGateOpen = 11,
+    FenceGateClose = 12,
     ChestOpen = 67,
     ChestClosed = 68,
     ShulkerBoxOpen = 69,
@@ -27,7 +33,7 @@ pub const LevelSoundEventPacket = struct {
         try stream.writeVarInt(Packet.LevelSoundEvent);
         try stream.writeVarInt(@intFromEnum(self.event));
         try Vector3f.write(stream, self.position);
-        try stream.writeZigZag(self.data);
+        try stream.writeVarInt(@as(u32, @bitCast(self.data)));
         try stream.writeVarString(self.actorIdentifier);
         try stream.writeBool(self.isBabyMob);
         try stream.writeBool(self.isGlobal);

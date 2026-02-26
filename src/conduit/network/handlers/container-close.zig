@@ -4,6 +4,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const BlockContainer = @import("../../container/block-container.zig").BlockContainer;
 const ChestTrait = @import("../../world/block/traits/chest.zig").ChestTrait;
+const BarrelTrait = @import("../../world/block/traits/barrel.zig").BarrelTrait;
 
 pub fn handleContainerClose(
     network: *NetworkHandler,
@@ -55,6 +56,11 @@ fn trySendBlockClose(network: *NetworkHandler, container: *@import("../../contai
     const dimension = world.getDimension("overworld") orelse return;
     const block = dimension.getBlockPtr(position) orelse return;
 
+    if (block.hasTrait(BarrelTrait.identifier)) {
+        sendBarrelClose(network, block, position);
+        return;
+    }
+
     if (!block.hasTrait(ChestTrait.identifier)) return;
 
     const state = block.getTraitState(ChestTrait) orelse return;
@@ -98,6 +104,61 @@ fn sendCloseAt(network: *NetworkHandler, block: *@import("../../world/block/bloc
                 .isGlobal = false,
             };
             const serialized = sound_packet.serialize(&s) catch continue;
+            network.sendPacket(p.connection, serialized) catch {};
+        }
+    }
+}
+
+fn sendBarrelClose(network: *NetworkHandler, block: *@import("../../world/block/block.zig").Block, position: Protocol.BlockPosition) void {
+    const BlockType = @import("../../world/block/block-type.zig").BlockType;
+    const BlockState = @import("../../world/block/block-permutation.zig").BlockState;
+
+    const perm = block.getPermutation(0) catch return;
+    if (!perm.state.contains("open_bit")) return;
+
+    const block_type = BlockType.get(perm.identifier) orelse return;
+    var state = BlockState.init(network.allocator);
+    defer state.deinit();
+
+    var iter = perm.state.iterator();
+    while (iter.next()) |entry| {
+        state.put(entry.key_ptr.*, entry.value_ptr.*) catch return;
+    }
+    state.put("open_bit", .{ .boolean = false }) catch return;
+
+    const new_perm = block_type.getPermutation(state);
+    block.setPermutation(new_perm, 0) catch {};
+
+    const snapshots = network.conduit.getPlayerSnapshots();
+    const network_id: u32 = @bitCast(new_perm.network_id);
+    for (snapshots) |p| {
+        if (!p.spawned) continue;
+        {
+            var s = BinaryStream.init(network.allocator, null, null);
+            defer s.deinit();
+            const update = Protocol.UpdateBlockPacket{
+                .position = position,
+                .networkBlockId = network_id,
+            };
+            const serialized = update.serialize(&s) catch continue;
+            network.sendPacket(p.connection, serialized) catch {};
+        }
+        {
+            var s = BinaryStream.init(network.allocator, null, null);
+            defer s.deinit();
+            const sound = Protocol.LevelSoundEventPacket{
+                .event = .BarrelClose,
+                .position = .{
+                    .x = @floatFromInt(position.x),
+                    .y = @floatFromInt(position.y),
+                    .z = @floatFromInt(position.z),
+                },
+                .data = new_perm.network_id,
+                .actorIdentifier = "",
+                .isBabyMob = false,
+                .isGlobal = false,
+            };
+            const serialized = sound.serialize(&s) catch continue;
             network.sendPacket(p.connection, serialized) catch {};
         }
     }

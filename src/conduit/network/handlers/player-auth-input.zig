@@ -7,7 +7,9 @@ const MoveDeltaFlags = Protocol.MoveDeltaFlags;
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
 const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
-const resolveWithRotation = @import("../../world/block/traits/rotation.zig").resolveWithRotation;
+const resolveWithPlacement = @import("../../world/block/traits/rotation.zig").resolveWithPlacement;
+const PlacementContext = @import("../../world/block/traits/rotation.zig").PlacementContext;
+const placeUpperBlock = @import("../../world/block/traits/rotation.zig").placeUpperBlock;
 const Events = @import("../../events/types.zig");
 
 pub fn handlePlayerAuthInput(
@@ -85,6 +87,16 @@ fn handleItemUseTransaction(
 
     if (dimension.getBlockPtr(transaction.blockPosition)) |cb| {
         if (!cb.fireEvent(.Interact, .{ cb, player })) return;
+    } else {
+        const perm = dimension.getPermutation(transaction.blockPosition, 0) catch null;
+        if (perm) |p| {
+            if (p.state.contains("open_bit")) {
+                try applyTraitsForBlock(player.entity.allocator, dimension, transaction.blockPosition);
+                if (dimension.getBlockPtr(transaction.blockPosition)) |cb| {
+                    if (!cb.fireEvent(.Interact, .{ cb, player })) return;
+                }
+            }
+        }
     }
 
     const inv_state = player.entity.getTraitState(InventoryTrait.InventoryTrait) orelse return;
@@ -95,7 +107,12 @@ fn handleItemUseTransaction(
 
     if (std.mem.eql(u8, base_permutation.identifier, "minecraft:air")) return;
 
-    const permutation = resolveWithRotation(player.entity.allocator, base_permutation, player.entity.rotation.y);
+    const permutation = resolveWithPlacement(player.entity.allocator, base_permutation, .{
+        .yaw = player.entity.rotation.y,
+        .pitch = player.entity.rotation.x,
+        .block_face = transaction.blockFace,
+        .clicked_position = transaction.clickedPosition,
+    });
 
     const face = transaction.blockFace;
     const pos = Protocol.BlockPosition{
@@ -116,6 +133,7 @@ fn handleItemUseTransaction(
 
     try dimension.setPermutation(pos, permutation, 0);
     try applyTraitsForBlock(player.entity.allocator, dimension, pos);
+    try placeUpperBlock(player.entity.allocator, dimension, pos, permutation);
 
     if (player.gamemode != .Creative) {
         inv_state.container.base.removeItem(inv_state.selected_slot, 1);
@@ -180,6 +198,11 @@ fn handleBlockAction(
                 .permutation = perm,
             };
             if (!network.conduit.events.emit(.BlockBreak, &break_event)) return;
+
+            if (dimension.getBlockPtr(pos)) |block| {
+                _ = block.fireEvent(.Break, .{ block, player });
+                dimension.removeBlock(pos);
+            }
 
             const air = BlockPermutation.resolve(player.entity.allocator, "minecraft:air", null) catch return;
             try dimension.setPermutation(pos, air, 0);

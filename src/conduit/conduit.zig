@@ -16,12 +16,16 @@ const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermuta
 const initRegistries = @import("./world/block/root.zig").initRegistries;
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 const ChestTrait = @import("./world/block/traits/chest.zig").ChestTrait;
+const BarrelTrait = @import("./world/block/traits/barrel.zig").BarrelTrait;
+const UpperBlockTrait = @import("./world/block/traits/upper-block.zig").UpperBlockTrait;
+const OpenBitTrait = @import("./world/block/traits/open-bit.zig").OpenBitTrait;
 const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDBProvider;
 const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
 
 const ItemPalette = @import("./items/item-palette.zig");
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
 const TaskQueue = @import("./tasks.zig").TaskQueue;
+const ThreadedTaskQueue = @import("./threaded-tasks.zig").ThreadedTaskQueue;
 
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
@@ -38,8 +42,10 @@ pub const Conduit = struct {
     creative_content: ?CreativeContentLoader.CreativeContentData,
     tick_count: u64 = 0,
     work_time_accumulator: u64 = 0,
+    tasks_time_accumulator: u64 = 0,
     current_tps: f64 = 20.0,
     tasks: TaskQueue,
+    threaded_tasks: ThreadedTaskQueue,
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
         const config = try ServerProperties.load(allocator, "server.properties");
@@ -73,6 +79,7 @@ pub const Conduit = struct {
             .creative_content = null,
             .network = undefined,
             .tasks = TaskQueue.init(allocator),
+            .threaded_tasks = ThreadedTaskQueue.init(allocator),
         };
     }
 
@@ -80,6 +87,9 @@ pub const Conduit = struct {
         try initRegistries(self.allocator);
         // TODO: Implement registerTrait instead of trait.register()
         try ChestTrait.register();
+        try BarrelTrait.register();
+        try UpperBlockTrait.registerForState("upper_block_bit");
+        try OpenBitTrait.registerForState("open_bit");
         const count = try loadBlockPermutations(self.allocator);
         Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
 
@@ -105,10 +115,16 @@ pub const Conduit = struct {
         std.fs.cwd().makePath("worlds/world/db") catch {};
         const leveldb_provider = try LevelDBProvider.init(self.allocator, "worlds/world/db");
         var world = try self.createWorld("world", leveldb_provider.asProvider());
-        _ = try world.createDimension("overworld", .Overworld, threaded);
+        const dim = try world.createDimension("overworld", .Overworld, threaded);
+
+        if (readLevelDatSpawn(self.allocator, "worlds/world/level.dat")) |spawn| {
+            dim.spawn_position = spawn;
+            Raknet.Logger.INFO("World spawn: {d}, {d}, {d}", .{ spawn.x, spawn.y, spawn.z });
+        } else |_| {}
 
         self.network = try NetworkHandler.init(self);
         self.raknet.setTickCallback(onTick, self);
+        try self.threaded_tasks.start();
         var event = Events.types.ServerStartEvent{};
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
@@ -205,17 +221,34 @@ pub const Conduit = struct {
             }
         }
 
+        const tasks_start = std.time.nanoTimestamp();
         _ = self.tasks.runUntil(work_start, tick_budget_ns * 40 / 100);
+        const tasks_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - tasks_start));
+        self.tasks_time_accumulator += tasks_ns;
+
+        self.threaded_tasks.drainCompleted();
 
         const work_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - work_start));
         self.work_time_accumulator += work_ns;
 
         if (self.tick_count % 20 == 0) {
             const avg_work_ns = self.work_time_accumulator / 20;
+            const avg_tasks_ns = self.tasks_time_accumulator / 20;
             self.work_time_accumulator = 0;
+            self.tasks_time_accumulator = 0;
+
+            const avg_work_ms = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000.0;
+            const avg_tasks_ms = @as(f64, @floatFromInt(avg_tasks_ns)) / 1_000_000.0;
+
             if (avg_work_ns >= tick_budget_ns) {
                 const work_s: f64 = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000_000.0;
                 self.current_tps = @min(20.0, 1.0 / work_s);
+                Raknet.Logger.INFO("TPS: {d:.1} | tick: {d:.1}ms | tasks: {d:.1}ms | pending: {d}", .{
+                    self.current_tps,
+                    avg_work_ms,
+                    avg_tasks_ms,
+                    self.tasks.pending(),
+                });
             } else {
                 self.current_tps = 20.0;
             }
@@ -296,5 +329,36 @@ pub const Conduit = struct {
         self.events.deinit();
         self.network.deinit();
         self.tasks.deinit();
+        self.threaded_tasks.deinit();
     }
 };
+
+const NBT = @import("nbt");
+
+fn readLevelDatSpawn(allocator: std.mem.Allocator, path: []const u8) !Protocol.BlockPosition {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+    const data = try file.readToEndAlloc(allocator, 8 * 1024 * 1024);
+    defer allocator.free(data);
+    if (data.len < 8) return error.InvalidLevelDat;
+
+    var stream = BinaryStream.init(allocator, data[8..], null);
+    defer stream.deinit();
+    var root = try NBT.CompoundTag.read(&stream, allocator, NBT.ReadWriteOptions.default);
+    defer root.deinit(allocator);
+
+    const sx = switch (root.get("SpawnX") orelse return error.NoSpawn) {
+        .Int => |t| t.value,
+        else => return error.NoSpawn,
+    };
+    const sy = switch (root.get("SpawnY") orelse return error.NoSpawn) {
+        .Int => |t| t.value,
+        else => return error.NoSpawn,
+    };
+    const sz = switch (root.get("SpawnZ") orelse return error.NoSpawn) {
+        .Int => |t| t.value,
+        else => return error.NoSpawn,
+    };
+
+    return Protocol.BlockPosition{ .x = sx, .y = sy, .z = sz };
+}
