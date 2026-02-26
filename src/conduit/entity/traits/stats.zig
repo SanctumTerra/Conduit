@@ -45,7 +45,7 @@ fn getMemoryMB() f64 {
         _ = iter.next();
         const rss_str = iter.next() orelse return 0;
         const rss_pages = std.fmt.parseInt(usize, rss_str, 10) catch return 0;
-        return @as(f64, @floatFromInt(rss_pages * std.heap.page_size)) / (1024.0 * 1024.0);
+        return @as(f64, @floatFromInt(rss_pages * std.heap.page_size_min)) / (1024.0 * 1024.0);
     }
 }
 
