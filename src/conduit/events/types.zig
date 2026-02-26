@@ -24,12 +24,19 @@ pub const BlockPlaceEvent = struct {
     permutation: *BlockPermutation,
 };
 
+pub const BlockBreakEvent = struct {
+    player: *Player,
+    position: Protocol.BlockPosition,
+    permutation: *BlockPermutation,
+};
+
 pub const Event = enum {
     ServerStart,
     ServerShutdown,
     PlayerJoin,
     PlayerChat,
     BlockPlace,
+    BlockBreak,
 
     pub fn DataType(comptime event: Event) type {
         return switch (event) {
@@ -38,6 +45,7 @@ pub const Event = enum {
             .PlayerJoin => PlayerJoinEvent,
             .PlayerChat => PlayerChatEvent,
             .BlockPlace => BlockPlaceEvent,
+            .BlockBreak => BlockBreakEvent,
         };
     }
 };

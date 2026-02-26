@@ -5,6 +5,8 @@ const Protocol = @import("protocol");
 const Container = @import("../../container/container.zig").Container;
 const InventoryTrait = @import("../../entity/traits/inventory.zig").InventoryTrait;
 const CursorTrait = @import("../../entity/traits/cursor.zig").CursorTrait;
+const ItemType = @import("../../items/item-type.zig").ItemType;
+const ItemStack = @import("../../items/item-stack.zig").ItemStack;
 
 fn resolveContainer(
     inv_state: *InventoryTrait.TraitState,
@@ -62,6 +64,16 @@ pub fn handleItemStackRequest(
                     const src = resolveContainer(inv_state, cursor_state, d.source.container.identifier, player) orelse continue;
                     src.clearSlot(d.source.slot);
                 },
+                .craftCreative => |c| {
+                    const cc = network.conduit.creative_content orelse continue;
+                    const network_id = cc.getNetworkIdByCreativeIndex(c.creativeItemNetworkId) orelse continue;
+                    const item_type = ItemType.getByNetworkId(network_id) orelse continue;
+                    const item = ItemStack.init(player.entity.allocator, item_type, .{
+                        .stackSize = item_type.max_stack_size,
+                    });
+                    cursor_state.container.base.setItem(0, item);
+                },
+                .craftResultsDeprecated => {},
                 else => |a| {
                     Raknet.Logger.WARN("Unhandeled action {any}", .{a});
                 },

@@ -126,5 +126,7 @@ pub const SetActorMotionPacket = @import("./packets/set-actor-motion.zig").SetAc
 pub const UpdateBlockPacket = @import("./packets/update-block.zig").UpdateBlockPacket;
 pub const BlockEventPacket = @import("./packets/block-event.zig").BlockEventPacket;
 pub const BlockEventType = @import("./packets/block-event.zig").BlockEventType;
+pub const LevelEventPacket = @import("./packets/level-event.zig").LevelEventPacket;
+pub const LevelEvent = @import("./packets/level-event.zig").LevelEvent;
 pub const LevelSoundEventPacket = @import("./packets/level-sound-event.zig").LevelSoundEventPacket;
 pub const LevelSoundEvent = @import("./packets/level-sound-event.zig").LevelSoundEvent;

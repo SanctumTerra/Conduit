@@ -7,6 +7,7 @@ const MoveDeltaFlags = Protocol.MoveDeltaFlags;
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
 const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
+const resolveWithRotation = @import("../../world/block/traits/rotation.zig").resolveWithRotation;
 const Events = @import("../../events/types.zig");
 
 pub fn handlePlayerAuthInput(
@@ -38,6 +39,12 @@ pub fn handlePlayerAuthInput(
     if (packet.inputData.hasFlag(.PerformItemInteraction)) {
         if (packet.itemTransaction) |transaction| {
             try handleItemUseTransaction(network, player, transaction);
+        }
+    }
+
+    if (packet.inputData.hasFlag(.PerformBlockActions)) {
+        for (packet.getBlockActions()) |action| {
+            try handleBlockAction(network, player, action);
         }
     }
 
@@ -84,9 +91,11 @@ fn handleItemUseTransaction(
     const held = InventoryTrait.getHeldItem(inv_state) orelse return;
 
     const identifier = held.item_type.identifier;
-    const permutation = BlockPermutation.resolve(player.entity.allocator, identifier, null) catch return;
+    const base_permutation = BlockPermutation.resolve(player.entity.allocator, identifier, null) catch return;
 
-    if (std.mem.eql(u8, permutation.identifier, "minecraft:air")) return;
+    if (std.mem.eql(u8, base_permutation.identifier, "minecraft:air")) return;
+
+    const permutation = resolveWithRotation(player.entity.allocator, base_permutation, player.entity.rotation.y);
 
     const face = transaction.blockFace;
     const pos = Protocol.BlockPosition{
@@ -108,7 +117,9 @@ fn handleItemUseTransaction(
     try dimension.setPermutation(pos, permutation, 0);
     try applyTraitsForBlock(player.entity.allocator, dimension, pos);
 
-    inv_state.container.base.removeItem(inv_state.selected_slot, 1);
+    if (player.gamemode != .Creative) {
+        inv_state.container.base.removeItem(inv_state.selected_slot, 1);
+    }
 
     const network_id: u32 = @bitCast(permutation.network_id);
     const snapshots = network.conduit.getPlayerSnapshots();
@@ -122,5 +133,89 @@ fn handleItemUseTransaction(
         };
         const serialized = try update.serialize(&s);
         try network.sendPacket(p.connection, serialized);
+    }
+}
+
+fn handleBlockAction(
+    network: *NetworkHandler,
+    player: *Player,
+    action: Protocol.PlayerBlockAction,
+) !void {
+    const world = network.conduit.getWorld("world") orelse return;
+    const dimension = world.getDimension("overworld") orelse return;
+
+    switch (action.action) {
+        .StartBreak, .ContinueDestroyBlock => {
+            if (player.block_target) |target| {
+                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
+                player.block_target = null;
+            }
+
+            const perm = dimension.getPermutation(action.blockPos, 0) catch return;
+            if (std.mem.eql(u8, perm.identifier, "minecraft:air")) return;
+
+            player.block_target = action.blockPos;
+
+            broadcastLevelEvent(network, .StartBlockCracking, action.blockPos.toVector3f(), 65535);
+        },
+        .AbortBreak => {
+            if (player.block_target) |target| {
+                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
+                player.block_target = null;
+            }
+        },
+        .PredictDestroyBlock, .CreativePlayerDestroyBlock => {
+            if (player.block_target) |target| {
+                broadcastLevelEvent(network, .StopBlockCracking, target.toVector3f(), 0);
+            }
+            player.block_target = null;
+
+            const pos = action.blockPos;
+            const perm = dimension.getPermutation(pos, 0) catch return;
+            if (std.mem.eql(u8, perm.identifier, "minecraft:air")) return;
+
+            var break_event = Events.BlockBreakEvent{
+                .player = player,
+                .position = pos,
+                .permutation = perm,
+            };
+            if (!network.conduit.events.emit(.BlockBreak, &break_event)) return;
+
+            const air = BlockPermutation.resolve(player.entity.allocator, "minecraft:air", null) catch return;
+            try dimension.setPermutation(pos, air, 0);
+
+            broadcastLevelEvent(network, .ParticlesDestroyBlock, pos.toVector3f(), @bitCast(perm.network_id));
+
+            const air_id: u32 = @bitCast(air.network_id);
+            const snapshots = network.conduit.getPlayerSnapshots();
+            for (snapshots) |p| {
+                if (!p.spawned) continue;
+                var s = BinaryStream.init(network.allocator, null, null);
+                defer s.deinit();
+                const update = Protocol.UpdateBlockPacket{
+                    .position = pos,
+                    .networkBlockId = air_id,
+                };
+                const serialized = try update.serialize(&s);
+                try network.sendPacket(p.connection, serialized);
+            }
+        },
+        else => {},
+    }
+}
+
+fn broadcastLevelEvent(network: *NetworkHandler, event: Protocol.LevelEvent, position: Protocol.Vector3f, data: i32) void {
+    var s = BinaryStream.init(network.allocator, null, null);
+    defer s.deinit();
+    const pkt = Protocol.LevelEventPacket{
+        .event = event,
+        .position = position,
+        .data = data,
+    };
+    const serialized = pkt.serialize(&s) catch return;
+    const snapshots = network.conduit.getPlayerSnapshots();
+    for (snapshots) |p| {
+        if (!p.spawned) continue;
+        network.sendPacket(p.connection, serialized) catch {};
     }
 }

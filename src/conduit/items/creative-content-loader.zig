@@ -8,9 +8,16 @@ pub const CreativeContentData = struct {
     allocator: std.mem.Allocator,
     group_count: usize,
     item_count: usize,
+    item_network_ids: []const i32,
 
     pub fn deinit(self: *CreativeContentData) void {
         self.allocator.free(self.serialized);
+        self.allocator.free(self.item_network_ids);
+    }
+
+    pub fn getNetworkIdByCreativeIndex(self: *const CreativeContentData, creative_index: u32) ?i32 {
+        if (creative_index == 0 or creative_index > self.item_network_ids.len) return null;
+        return self.item_network_ids[creative_index - 1];
     }
 };
 
@@ -21,7 +28,7 @@ pub fn loadCreativeContent(allocator: std.mem.Allocator) !CreativeContentData {
     try stream.writeVarInt(Protocol.Packet.CreativeContent);
 
     const group_count = try writeGroups(&stream, allocator);
-    const item_count = try writeItems(&stream, allocator);
+    const result = try writeItems(&stream, allocator);
 
     const buf = stream.getBuffer();
     const serialized = try allocator.alloc(u8, buf.len);
@@ -31,7 +38,8 @@ pub fn loadCreativeContent(allocator: std.mem.Allocator) !CreativeContentData {
         .serialized = serialized,
         .allocator = allocator,
         .group_count = group_count,
-        .item_count = item_count,
+        .item_count = result.count,
+        .item_network_ids = result.network_ids,
     };
 }
 
@@ -75,7 +83,12 @@ fn writeGroups(stream: *BinaryStream, allocator: std.mem.Allocator) !usize {
     return count;
 }
 
-fn writeItems(stream: *BinaryStream, allocator: std.mem.Allocator) !usize {
+const WriteItemsResult = struct {
+    count: usize,
+    network_ids: []const i32,
+};
+
+fn writeItems(stream: *BinaryStream, allocator: std.mem.Allocator) !WriteItemsResult {
     const parsed = try std.json.parseFromSlice(
         std.json.Value,
         allocator,
@@ -88,6 +101,8 @@ fn writeItems(stream: *BinaryStream, allocator: std.mem.Allocator) !usize {
 
     try stream.writeVarInt(@intCast(arr.len));
 
+    var ids = std.ArrayList(i32){ .items = &.{}, .capacity = 0 };
+
     var count: usize = 0;
     for (arr, 0..) |entry, i| {
         if (entry != .object) continue;
@@ -99,13 +114,22 @@ fn writeItems(stream: *BinaryStream, allocator: std.mem.Allocator) !usize {
         const raw = decodeBase64(allocator, instance_b64) catch continue;
         defer allocator.free(raw);
 
+        var reader = BinaryStream.init(allocator, raw, null);
+        defer reader.deinit();
+        const network_id = reader.readZigZag() catch 0;
+
         try stream.writeVarInt(@intCast(i + 1));
         try stream.write(raw);
         try stream.writeVarInt(group_index);
+
+        try ids.append(allocator, network_id);
         count += 1;
     }
 
-    return count;
+    return .{
+        .count = count,
+        .network_ids = try ids.toOwnedSlice(allocator),
+    };
 }
 
 fn decodeBase64(allocator: std.mem.Allocator, b64: []const u8) ![]const u8 {

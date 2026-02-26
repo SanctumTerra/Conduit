@@ -31,6 +31,8 @@ pub const Player = struct {
     sent_chunks: std.AutoHashMap(i64, void),
     spawned: bool = false,
     opened_container: ?*Container = null,
+    block_target: ?Protocol.BlockPosition = null,
+    gamemode: Protocol.GameMode = .Creative,
 
     pub fn init(
         self: *Player,
