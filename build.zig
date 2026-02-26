@@ -55,6 +55,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const is_windows = target.result.os.tag == .windows;
+    const is_macos = target.result.os.tag == .macos;
 
     const leveldb_lib = b.addLibrary(.{
         .name = "leveldb",
@@ -72,6 +73,8 @@ pub fn build(b: *std.Build) void {
 
     const platform_flags: []const []const u8 = if (is_windows)
         &.{ "-std=c++17", "-DLEVELDB_PLATFORM_WINDOWS", "-D_UNICODE", "-DUNICODE", "-DWIN32_LEAN_AND_MEAN", "-DNOMINMAX" }
+    else if (is_macos)
+        &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FULLFSYNC=1", "-DHAVE_O_CLOEXEC=1" }
     else
         &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FDATASYNC=1", "-DHAVE_O_CLOEXEC=1" };
 
