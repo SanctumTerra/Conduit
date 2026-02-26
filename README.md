@@ -27,6 +27,7 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [ ] Entity System (WIP)
 - [x] Entity Trait System
 - [ ] Entity Drops
+- [x] LevelDB
 - [ ] Plugin API
 - [ ] Command System
 - [ ] Resource Pack loading
