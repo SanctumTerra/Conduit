@@ -87,8 +87,12 @@ pub const InternalProvider = struct {
     const vtable = WorldProvider.VTable{
         .readChunk = vtableReadChunk,
         .writeChunk = vtableWriteChunk,
+        .uncacheChunk = null,
         .readBuffer = vtableReadBuffer,
         .writeBuffer = vtableWriteBuffer,
+        .writePlayer = null,
+        .readPlayer = null,
+        .writeChunkEntities = null,
         .deinitFn = vtableDeinit,
     };
 

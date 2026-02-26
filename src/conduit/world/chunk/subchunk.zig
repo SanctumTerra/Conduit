@@ -68,12 +68,23 @@ pub const SubChunk = struct {
         for (self.layers.items) |*layer| try layer.serialize(stream);
     }
 
+    pub fn serializePersistence(self: *const SubChunk, stream: *BinaryStream, allocator: std.mem.Allocator) !void {
+        try stream.writeUint8(self.version);
+        try stream.writeUint8(@intCast(self.layers.items.len));
+        if (self.version == 9) try stream.writeInt8(self.index);
+        for (self.layers.items) |*layer| try layer.serializePersistence(stream, allocator);
+    }
+
     pub fn deserialize(stream: *BinaryStream, allocator: std.mem.Allocator) !SubChunk {
         const version = try stream.readUint8();
         const count = try stream.readUint8();
         const index: i8 = if (version == 9) try stream.readInt8() else 0;
 
         var layers = std.ArrayList(BlockStorage){ .items = &.{}, .capacity = 0 };
+        errdefer {
+            for (layers.items) |*layer| layer.deinit();
+            layers.deinit(allocator);
+        }
         for (0..count) |_| {
             try layers.append(allocator, try BlockStorage.deserialize(stream, allocator));
         }

@@ -5,6 +5,8 @@ Why Zig? Zig is fast - very fast - and for a Bedrock server, performance really 
 Building Conduit in Zig means we can deliver the performance we need.
 </p>
 
+![Screenshot](public/screenshot.png)
+
 ## TODO
 - [x] Accept Connections
 - [x] Handle Login

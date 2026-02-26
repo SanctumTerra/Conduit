@@ -16,6 +16,8 @@ const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermuta
 const initRegistries = @import("./world/block/root.zig").initRegistries;
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 const ChestTrait = @import("./world/block/traits/chest.zig").ChestTrait;
+const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDBProvider;
+const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
 
 const ItemPalette = @import("./items/item-palette.zig");
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
@@ -59,7 +61,7 @@ pub const Conduit = struct {
                     .max_players = @intCast(config.max_players),
                     .guid = 0,
                     .name = config.motd,
-                    .gamemode = "Survival",
+                    .gamemode = "Creative",
                 },
             }),
             .players = std.AutoHashMap(i64, *Player).init(allocator),
@@ -100,7 +102,9 @@ pub const Conduit = struct {
         const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
         const threaded = try Generator.ThreadedGenerator.init(self.allocator, superflat.asGenerator(), null);
 
-        var world = try self.createWorld("world");
+        std.fs.cwd().makePath("worlds/world/db") catch {};
+        const leveldb_provider = try LevelDBProvider.init(self.allocator, "worlds/world/db");
+        var world = try self.createWorld("world", leveldb_provider.asProvider());
         _ = try world.createDimension("overworld", .Overworld, threaded);
 
         self.network = try NetworkHandler.init(self);
@@ -201,7 +205,7 @@ pub const Conduit = struct {
             }
         }
 
-        _ = self.tasks.runUntil(work_start, tick_budget_ns * 80 / 100);
+        _ = self.tasks.runUntil(work_start, tick_budget_ns * 40 / 100);
 
         const work_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - work_start));
         self.work_time_accumulator += work_ns;
@@ -216,19 +220,44 @@ pub const Conduit = struct {
                 self.current_tps = 20.0;
             }
         }
+
+        if (self.tick_count % 6000 == 0) {
+            self.saveAllWorlds();
+        }
     }
 
-    pub fn createWorld(self: *Conduit, identifier: []const u8) !*World {
+    pub fn createWorld(self: *Conduit, identifier: []const u8, provider: ?WorldProvider) !*World {
         if (self.worlds.get(identifier)) |existing| return existing;
 
         const world = try self.allocator.create(World);
-        world.* = try World.init(self, self.allocator, identifier, null);
+        world.* = try World.init(self, self.allocator, identifier, provider);
         try self.worlds.put(identifier, world);
         return world;
     }
 
     pub fn getWorld(self: *Conduit, identifier: []const u8) ?*World {
         return self.worlds.get(identifier);
+    }
+
+    pub fn saveAllWorlds(self: *Conduit) void {
+        var worlds_it = self.worlds.valueIterator();
+        while (worlds_it.next()) |world| {
+            var dims_it = world.*.dimensions.valueIterator();
+            while (dims_it.next()) |dim| {
+                var chunk_iter = dim.*.chunks.valueIterator();
+                while (chunk_iter.next()) |chunk| {
+                    world.*.provider.writeChunkEntities(chunk.*, dim.*) catch {};
+                    if (chunk.*.dirty) {
+                        world.*.provider.writeChunk(chunk.*, dim.*) catch continue;
+                    }
+                }
+            }
+        }
+
+        const snapshots = self.getPlayerSnapshots();
+        for (snapshots) |player| {
+            player.savePlayerData();
+        }
     }
 
     pub fn deinit(self: *Conduit) void {
@@ -238,6 +267,8 @@ pub const Conduit = struct {
             thread.join();
             self.raknet.tick_thread = null;
         }
+
+        self.saveAllWorlds();
 
         var it = self.players.valueIterator();
         while (it.next()) |player| {

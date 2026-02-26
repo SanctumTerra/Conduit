@@ -6,6 +6,8 @@ pub const Task = struct {
     func: TaskFn,
     ctx: *anyopaque,
     name: []const u8,
+    owner_id: i64 = 0,
+    cleanup: ?*const fn (*anyopaque) void = null,
 };
 
 pub const TaskQueue = struct {
@@ -20,11 +22,27 @@ pub const TaskQueue = struct {
     }
 
     pub fn deinit(self: *TaskQueue) void {
+        for (self.tasks.items) |task| {
+            if (task.cleanup) |cb| cb(task.ctx);
+        }
         self.tasks.deinit(self.allocator);
     }
 
     pub fn enqueue(self: *TaskQueue, task: Task) !void {
         try self.tasks.append(self.allocator, task);
+    }
+
+    pub fn cancelByOwner(self: *TaskQueue, name: []const u8, owner_id: i64, cleanup: ?*const fn (*anyopaque) void) void {
+        var i: usize = 0;
+        while (i < self.tasks.items.len) {
+            const task = self.tasks.items[i];
+            if (task.owner_id == owner_id and std.mem.eql(u8, task.name, name)) {
+                if (cleanup) |cb| cb(task.ctx);
+                _ = self.tasks.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Runs tasks until budget_ns is exhausted. Returns true if work was done.

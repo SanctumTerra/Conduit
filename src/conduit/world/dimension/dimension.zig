@@ -85,12 +85,14 @@ pub const Dimension = struct {
         const hash = chunkHash(x, z);
         if (self.chunks.get(hash)) |chunk| return chunk;
 
-        const chunk = if (self.generator) |gen|
-            try gen.generate(x, z)
-        else blk: {
-            const c = try self.allocator.create(Chunk);
-            c.* = Chunk.init(self.allocator, x, z, self.dimension_type);
-            break :blk c;
+        const chunk = self.world.provider.readChunk(x, z, self) catch blk: {
+            if (self.generator) |gen|
+                break :blk try gen.generate(x, z)
+            else {
+                const c = try self.allocator.create(Chunk);
+                c.* = Chunk.init(self.allocator, x, z, self.dimension_type);
+                break :blk c;
+            }
         };
 
         try self.chunks.put(hash, chunk);
@@ -100,6 +102,7 @@ pub const Dimension = struct {
     pub fn removeChunk(self: *Dimension, x: i32, z: i32) void {
         const hash = chunkHash(x, z);
         if (self.chunks.fetchRemove(hash)) |entry| {
+            self.world.provider.uncacheChunk(x, z, self);
             var chunk = entry.value;
             chunk.deinit();
             self.allocator.destroy(chunk);
@@ -127,6 +130,8 @@ pub const Dimension = struct {
             }
             if (!still_needed) {
                 if (self.chunks.fetchRemove(h)) |entry| {
+                    const coords2 = Protocol.ChunkCoords.unhash(h);
+                    self.world.provider.uncacheChunk(coords2.x, coords2.z, self);
                     var chunk = entry.value;
                     chunk.deinit();
                     self.allocator.destroy(chunk);
@@ -181,12 +186,11 @@ pub const Dimension = struct {
     pub fn loadSpawnChunks(self: *Dimension) !void {
         const spawn_cx = self.spawn_position.x >> 4;
         const spawn_cz = self.spawn_position.z >> 4;
-        const sim = self.simulation_distance;
-        var cx: i32 = spawn_cx - sim;
-        while (cx <= spawn_cx + sim) : (cx += 1) {
-            var cz: i32 = spawn_cz - sim;
-            while (cz <= spawn_cz + sim) : (cz += 1) {
-                if ((cx - spawn_cx) * (cx - spawn_cx) + (cz - spawn_cz) * (cz - spawn_cz) > sim * sim) continue;
+        const radius: i32 = 2;
+        var cx: i32 = spawn_cx - radius;
+        while (cx <= spawn_cx + radius) : (cx += 1) {
+            var cz: i32 = spawn_cz - radius;
+            while (cz <= spawn_cz + radius) : (cz += 1) {
                 _ = try self.getOrCreateChunk(cx, cz);
             }
         }

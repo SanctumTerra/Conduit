@@ -11,3 +11,6 @@ dump
 .bun
 .build
 .test
+
+server.properties
+worlds/

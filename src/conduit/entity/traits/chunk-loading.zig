@@ -5,6 +5,7 @@ const Entity = @import("../entity.zig").Entity;
 const EntityTrait = @import("./trait.zig").EntityTrait;
 const Player = @import("../../player/player.zig").Player;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
+const Conduit = @import("../../conduit.zig").Conduit;
 const Task = @import("../../tasks.zig").Task;
 
 pub const State = struct {
@@ -57,149 +58,170 @@ fn sendPublisherUpdate(player: *Player) void {
 }
 
 const ChunkStreamState = struct {
-    player: *Player,
-    dimension: *Dimension,
+    conduit: *Conduit,
+    runtime_id: i64,
+    allocator: std.mem.Allocator,
     center_x: i32,
     center_z: i32,
     radius: i32,
-    cx: i32,
-    cz: i32,
-    old_hashes: ?std.ArrayList(i64),
+    ring: i32,
+    ring_idx: i32,
 };
 
-fn queueChunkStreaming(player: *Player) !void {
-    const world = player.network.conduit.getWorld("world") orelse return;
-    const overworld = world.getDimension("overworld") orelse return;
+pub fn queueChunkStreaming(player: *Player) !void {
+    const conduit = player.network.conduit;
+    const world = conduit.getWorld("world") orelse return;
+    const dimension = world.getDimension("overworld") orelse return;
     const allocator = player.entity.allocator;
+
+    conduit.tasks.cancelByOwner("chunk_streaming", player.entity.runtime_id, destroyStreamState);
 
     const center_x = @as(i32, @intFromFloat(@floor(player.entity.position.x))) >> 4;
     const center_z = @as(i32, @intFromFloat(@floor(player.entity.position.z))) >> 4;
     const radius = player.view_distance;
 
-    var old_hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+    var stale_hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+    defer stale_hashes.deinit(allocator);
+
     var it = player.sent_chunks.keyIterator();
     while (it.next()) |key| {
         const coords = Protocol.ChunkCoords.unhash(key.*);
         const dx = coords.x - center_x;
         const dz = coords.z - center_z;
         if (dx * dx + dz * dz > radius * radius) {
-            old_hashes.append(allocator, key.*) catch {};
+            stale_hashes.append(allocator, key.*) catch {};
         }
     }
 
-    for (old_hashes.items) |h| {
+    for (stale_hashes.items) |h| {
         _ = player.sent_chunks.remove(h);
     }
-    overworld.releaseUnrenderedChunks(old_hashes.items);
-    old_hashes.deinit(allocator);
+
+    dimension.releaseUnrenderedChunks(stale_hashes.items);
 
     const state = try allocator.create(ChunkStreamState);
     state.* = .{
-        .player = player,
-        .dimension = overworld,
+        .conduit = conduit,
+        .runtime_id = player.entity.runtime_id,
+        .allocator = allocator,
         .center_x = center_x,
         .center_z = center_z,
         .radius = radius,
-        .cx = center_x - radius,
-        .cz = center_z - radius,
-        .old_hashes = null,
+        .ring = 0,
+        .ring_idx = 0,
     };
 
-    try player.network.conduit.tasks.enqueue(.{
+    try conduit.tasks.enqueue(.{
         .func = chunkStreamStep,
         .ctx = @ptrCast(state),
         .name = "chunk_streaming",
+        .owner_id = player.entity.runtime_id,
+        .cleanup = destroyStreamState,
     });
+}
+
+pub fn destroyStreamState(ctx: *anyopaque) void {
+    const state: *ChunkStreamState = @ptrCast(@alignCast(ctx));
+    state.allocator.destroy(state);
 }
 
 fn chunkStreamStep(ctx: *anyopaque) bool {
     const state: *ChunkStreamState = @ptrCast(@alignCast(ctx));
-    const player = state.player;
-    const allocator = player.entity.allocator;
-    const batch: u32 = 8;
-    var sent: u32 = 0;
+    const allocator = state.allocator;
 
-    var packet_batch = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
-    defer {
-        for (packet_batch.items) |pkt| allocator.free(pkt);
-        packet_batch.deinit(allocator);
-    }
-
-    while (sent < batch and state.cx <= state.center_x + state.radius) {
-        const dx = state.cx - state.center_x;
-        const dz = state.cz - state.center_z;
-        if (dx * dx + dz * dz > state.radius * state.radius) {
-            advance(state);
-            continue;
-        }
-
-        const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = state.cx, .z = state.cz });
-        if (player.sent_chunks.contains(chunk_hash)) {
-            advance(state);
-            continue;
-        }
-
-        const chunk = state.dimension.getOrCreateChunk(state.cx, state.cz) catch {
-            advance(state);
-            continue;
-        };
-
-        var chunk_stream = BinaryStream.init(allocator, null, null);
-        defer chunk_stream.deinit();
-        chunk.serialize(&chunk_stream) catch {
-            advance(state);
-            continue;
-        };
-
-        var pkt_stream = BinaryStream.init(allocator, null, null);
-        defer pkt_stream.deinit();
-
-        var level_chunk = Protocol.LevelChunkPacket{
-            .x = state.cx,
-            .z = state.cz,
-            .dimension = .Overworld,
-            .highestSubChunkCount = 0,
-            .subChunkCount = @intCast(chunk.getSubChunkSendCount()),
-            .cacheEnabled = false,
-            .blobs = &[_]u64{},
-            .data = chunk_stream.getBuffer(),
-        };
-
-        const serialized = level_chunk.serialize(&pkt_stream) catch {
-            advance(state);
-            continue;
-        };
-
-        packet_batch.append(allocator, allocator.dupe(u8, serialized) catch {
-            advance(state);
-            continue;
-        }) catch {
-            advance(state);
-            continue;
-        };
-
-        player.sent_chunks.put(chunk_hash, {}) catch {};
-        sent += 1;
-        advance(state);
-    }
-
-    if (packet_batch.items.len > 0) {
-        player.network.sendPackets(player.connection, packet_batch.items) catch {};
-    }
-
-    if (state.cx > state.center_x + state.radius) {
+    const player = state.conduit.players.get(state.runtime_id) orelse {
         allocator.destroy(state);
         return true;
+    };
+
+    const world = state.conduit.getWorld("world") orelse {
+        allocator.destroy(state);
+        return true;
+    };
+    const dimension = world.getDimension("overworld") orelse {
+        allocator.destroy(state);
+        return true;
+    };
+
+    var did_load = false;
+
+    while (state.ring <= state.radius) {
+        const ring = state.ring;
+        if (ring == 0) {
+            state.ring = 1;
+            state.ring_idx = 0;
+            const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = state.center_x, .z = state.center_z });
+            if (!player.sent_chunks.contains(chunk_hash)) {
+                const cached = dimension.getChunk(state.center_x, state.center_z) != null;
+                if (!cached and did_load) return false;
+                sendAndFlush(dimension, state.center_x, state.center_z, allocator, player);
+                if (!cached) did_load = true;
+            }
+            continue;
+        }
+
+        const perimeter = ring * 8;
+        if (state.ring_idx >= perimeter) {
+            state.ring += 1;
+            state.ring_idx = 0;
+            continue;
+        }
+
+        const coords = ringCoord(state.center_x, state.center_z, ring, state.ring_idx);
+        state.ring_idx += 1;
+
+        const dx = coords[0] - state.center_x;
+        const dz = coords[1] - state.center_z;
+        if (dx * dx + dz * dz > state.radius * state.radius) continue;
+
+        const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = coords[0], .z = coords[1] });
+        if (player.sent_chunks.contains(chunk_hash)) continue;
+
+        const cached = dimension.getChunk(coords[0], coords[1]) != null;
+        if (!cached and did_load) return false;
+        sendAndFlush(dimension, coords[0], coords[1], allocator, player);
+        if (!cached) did_load = true;
     }
-    return false;
+
+    allocator.destroy(state);
+    return true;
 }
 
-fn advance(state: *ChunkStreamState) void {
-    state.cz += 1;
-    if (state.cz > state.center_z + state.radius) {
-        state.cz = state.center_z - state.radius;
-        state.cx += 1;
-    }
+fn sendAndFlush(dimension: *Dimension, cx: i32, cz: i32, allocator: std.mem.Allocator, player: *Player) void {
+    const chunk = dimension.getOrCreateChunk(cx, cz) catch return;
+
+    var chunk_stream = BinaryStream.init(allocator, null, null);
+    defer chunk_stream.deinit();
+    chunk.serialize(&chunk_stream) catch return;
+
+    var pkt_stream = BinaryStream.init(allocator, null, null);
+    defer pkt_stream.deinit();
+
+    var level_chunk = Protocol.LevelChunkPacket{
+        .x = cx,
+        .z = cz,
+        .dimension = .Overworld,
+        .highestSubChunkCount = 0,
+        .subChunkCount = @intCast(chunk.getSubChunkSendCount()),
+        .cacheEnabled = false,
+        .blobs = &[_]u64{},
+        .data = chunk_stream.getBuffer(),
+    };
+
+    const serialized = level_chunk.serialize(&pkt_stream) catch return;
+    player.network.sendPacket(player.connection, serialized) catch {};
+    player.sent_chunks.put(Protocol.ChunkCoords.hash(.{ .x = cx, .z = cz }), {}) catch {};
+}
+
+fn ringCoord(cx: i32, cz: i32, ring: i32, idx: i32) [2]i32 {
+    const side = ring * 2;
+    if (idx < side) return .{ cx - ring + idx, cz - ring };
+    const idx2 = idx - side;
+    if (idx2 < side) return .{ cx + ring, cz - ring + idx2 };
+    const idx3 = idx2 - side;
+    if (idx3 < side) return .{ cx + ring - idx3, cz + ring };
+    const idx4 = idx3 - side;
+    return .{ cx - ring, cz + ring - idx4 };
 }
 
 pub const ChunkLoadingTrait = EntityTrait(State, .{

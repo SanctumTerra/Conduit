@@ -12,7 +12,7 @@ const Container = @import("../container/container.zig").Container;
 
 const InventoryTrait = @import("../entity/traits/inventory.zig").InventoryTrait;
 const StatsTrait = @import("../entity/traits/stats.zig").StatsTrait;
-const ChunkLoadingTrait = @import("../entity/traits/chunk-loading.zig").ChunkLoadingTrait;
+const ChunkLoadingTrait = @import("../entity/traits/chunk-loading.zig");
 const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
 const Display = @import("../items/traits/display.zig");
 const DisplayTrait = Display.DisplayTrait;
@@ -71,7 +71,7 @@ pub const Player = struct {
         });
         try self.entity.addTrait(stats);
 
-        const chunk_loading = try ChunkLoadingTrait.create(allocator, .{
+        const chunk_loading = try ChunkLoadingTrait.ChunkLoadingTrait.create(allocator, .{
             .last_chunk_x = 0,
             .last_chunk_z = 0,
             .initialized = false,
@@ -91,10 +91,24 @@ pub const Player = struct {
     }
 
     pub fn disconnect(self: *Player) !void {
+        self.savePlayerData();
+        self.network.conduit.tasks.cancelByOwner("chunk_streaming", self.entity.runtime_id, ChunkLoadingTrait.destroyStreamState);
         self.releaseChunks();
         self.network.conduit.removePlayer(self);
         self.deinit();
         self.entity.allocator.destroy(self);
+    }
+
+    pub fn savePlayerData(self: *Player) void {
+        const world = self.network.conduit.getWorld("world") orelse return;
+        world.provider.writePlayer(self.uuid, self) catch |err| {
+            Raknet.Logger.ERROR("Failed to save player {s}: {any}", .{ self.username, err });
+        };
+    }
+
+    pub fn loadPlayerData(self: *Player) bool {
+        const world = self.network.conduit.getWorld("world") orelse return false;
+        return world.provider.readPlayer(self.uuid, self) catch false;
     }
 
     fn releaseChunks(self: *Player) void {
@@ -117,6 +131,15 @@ pub const Player = struct {
             Raknet.Logger.ERROR("Failed to send spawn chunks for {s}: {any}", .{ self.username, err });
         };
         Raknet.Logger.INFO("Player {s} has spawned.", .{self.username});
+
+        const loaded = self.loadPlayerData();
+
+        if (loaded) {
+            if (self.entity.getTraitState(InventoryTrait)) |state| {
+                var s: *InventoryTrait.TraitState = state;
+                s.container.update();
+            }
+        }
 
         if (self.entity.getTraitState(InventoryTrait)) |state| {
             var s: *InventoryTrait.TraitState = state;
@@ -244,8 +267,9 @@ pub const Player = struct {
         const world = self.network.conduit.getWorld("world") orelse return;
         const overworld = world.getDimension("overworld") orelse return;
 
-        const radius = self.view_distance;
-        const batch_size: usize = 10;
+        const cx = @as(i32, @intFromFloat(@floor(self.entity.position.x))) >> 4;
+        const cz = @as(i32, @intFromFloat(@floor(self.entity.position.z))) >> 4;
+        const immediate_radius: i32 = 3;
 
         var packet_batch = std.ArrayList([]const u8){ .items = &.{}, .capacity = 0 };
         defer {
@@ -253,61 +277,70 @@ pub const Player = struct {
             packet_batch.deinit(allocator);
         }
 
-        var cx: i32 = -radius;
-        while (cx <= radius) : (cx += 1) {
-            var cz: i32 = -radius;
-            while (cz <= radius) : (cz += 1) {
-                if (cx * cx + cz * cz > radius * radius) continue;
+        var ring: i32 = 0;
+        while (ring <= immediate_radius) : (ring += 1) {
+            var dx: i32 = -ring;
+            while (dx <= ring) : (dx += 1) {
+                var dz: i32 = -ring;
+                while (dz <= ring) : (dz += 1) {
+                    if (ring > 0 and @abs(dx) != ring and @abs(dz) != ring) continue;
+                    if (dx * dx + dz * dz > immediate_radius * immediate_radius) continue;
 
-                const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = cx, .z = cz });
-                if (self.sent_chunks.contains(chunk_hash)) continue;
+                    const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = cx + dx, .z = cz + dz });
+                    if (self.sent_chunks.contains(chunk_hash)) continue;
 
-                const chunk = try overworld.getOrCreateChunk(cx, cz);
+                    const chunk = overworld.getOrCreateChunk(cx + dx, cz + dz) catch continue;
 
-                var chunk_stream = BinaryStream.init(allocator, null, null);
-                defer chunk_stream.deinit();
-                try chunk.serialize(&chunk_stream);
-                const chunk_data = chunk_stream.getBuffer();
+                    var chunk_stream = BinaryStream.init(allocator, null, null);
+                    defer chunk_stream.deinit();
+                    chunk.serialize(&chunk_stream) catch continue;
 
-                var pkt_stream = BinaryStream.init(allocator, null, null);
-                defer pkt_stream.deinit();
+                    var pkt_stream = BinaryStream.init(allocator, null, null);
+                    defer pkt_stream.deinit();
 
-                var level_chunk = Protocol.LevelChunkPacket{
-                    .x = cx,
-                    .z = cz,
-                    .dimension = .Overworld,
-                    .highestSubChunkCount = 0,
-                    .subChunkCount = @intCast(chunk.getSubChunkSendCount()),
-                    .cacheEnabled = false,
-                    .blobs = &[_]u64{},
-                    .data = chunk_data,
-                };
+                    var level_chunk = Protocol.LevelChunkPacket{
+                        .x = cx + dx,
+                        .z = cz + dz,
+                        .dimension = .Overworld,
+                        .highestSubChunkCount = 0,
+                        .subChunkCount = @intCast(chunk.getSubChunkSendCount()),
+                        .cacheEnabled = false,
+                        .blobs = &[_]u64{},
+                        .data = chunk_stream.getBuffer(),
+                    };
 
-                const serialized = try level_chunk.serialize(&pkt_stream);
-                try packet_batch.append(allocator, try allocator.dupe(u8, serialized));
-                try self.sent_chunks.put(chunk_hash, {});
-
-                if (packet_batch.items.len >= batch_size) {
-                    try self.network.sendPackets(self.connection, packet_batch.items);
-                    for (packet_batch.items) |pkt| allocator.free(pkt);
-                    packet_batch.clearRetainingCapacity();
+                    const serialized = level_chunk.serialize(&pkt_stream) catch continue;
+                    packet_batch.append(allocator, allocator.dupe(u8, serialized) catch continue) catch continue;
+                    self.sent_chunks.put(chunk_hash, {}) catch {};
                 }
+            }
+
+            if (packet_batch.items.len >= 8) {
+                self.network.sendPackets(self.connection, packet_batch.items) catch {};
+                for (packet_batch.items) |pkt| allocator.free(pkt);
+                packet_batch.clearRetainingCapacity();
             }
         }
 
         if (packet_batch.items.len > 0) {
-            try self.network.sendPackets(self.connection, packet_batch.items);
+            self.network.sendPackets(self.connection, packet_batch.items) catch {};
         }
 
         var pub_stream = BinaryStream.init(allocator, null, null);
         defer pub_stream.deinit();
 
         var update = Protocol.NetworkChunkPublisherUpdatePacket{
-            .coordinate = Protocol.BlockPosition{ .x = 0, .y = 100, .z = 0 },
-            .radius = @intCast(radius * 16),
+            .coordinate = Protocol.BlockPosition{
+                .x = @intFromFloat(@floor(self.entity.position.x)),
+                .y = @intFromFloat(@floor(self.entity.position.y)),
+                .z = @intFromFloat(@floor(self.entity.position.z)),
+            },
+            .radius = @intCast(self.view_distance * 16),
             .savedChunks = &[_]Protocol.ChunkCoords{},
         };
-        const pub_serialized = try update.serialize(&pub_stream);
-        try self.network.sendPacket(self.connection, pub_serialized);
+        const pub_serialized = update.serialize(&pub_stream) catch return;
+        self.network.sendPacket(self.connection, pub_serialized) catch {};
+
+        ChunkLoadingTrait.queueChunkStreaming(self) catch {};
     }
 };

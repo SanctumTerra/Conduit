@@ -119,18 +119,23 @@ pub const BlockPermutation = struct {
         return true;
     }
 
-    /// TODO: Implement when needed for world saving
-    pub fn toNBT(self: *const BlockPermutation, allocator: std.mem.Allocator) !NBT.Tag {
-        _ = self;
-        _ = allocator;
-        return error.NotImplemented;
-    }
+    pub fn toNBT(self: *const BlockPermutation, allocator: std.mem.Allocator) !NBT.CompoundTag {
+        var root = NBT.CompoundTag.init(allocator, null);
+        try root.set("name", .{ .String = NBT.StringTag.init(try allocator.dupe(u8, self.identifier), null) });
 
-    /// TODO: Implement when needed for world loading
-    pub fn fromNBT(allocator: std.mem.Allocator, nbt: NBT.Tag) !*BlockPermutation {
-        _ = allocator;
-        _ = nbt;
-        return error.NotImplemented;
+        var states = NBT.CompoundTag.init(allocator, null);
+        var iter = self.state.iterator();
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            switch (entry.value_ptr.*) {
+                .boolean => |b| try states.set(key, .{ .Byte = NBT.ByteTag.init(if (b) 1 else 0, null) }),
+                .integer => |i| try states.set(key, .{ .Int = NBT.IntTag.init(i, null) }),
+                .string => |s| try states.set(key, .{ .String = NBT.StringTag.init(try allocator.dupe(u8, s), null) }),
+            }
+        }
+        try root.set("states", .{ .Compound = states });
+
+        return root;
     }
 
     pub fn calculateHash(allocator: std.mem.Allocator, identifier: []const u8, state: BlockState) !i32 {

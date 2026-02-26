@@ -18,6 +18,6 @@ pub fn main() !void {
 
     try conduit.start();
 
-    std.Thread.sleep(std.time.ns_per_min);
+    std.Thread.sleep(std.time.ns_per_min * 5);
     try conduit.stop();
 }

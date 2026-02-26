@@ -61,7 +61,7 @@ pub fn handleResourcePack(
                     var packet = Protocol.StartGamePacket{
                         .entityId = entity_id,
                         .runtimeEntityId = runtime_entity_id,
-                        .playerGamemode = .Survival,
+                        .playerGamemode = .Creative,
                         .playerPosition = Protocol.Vector3f.init(0, -58, 0),
                         .pitch = 0.0,
                         .yaw = 0.0,
