@@ -1,8 +1,7 @@
 # A possible list of disallowed files ( Does not mean that they all exist tho just incase ppl contribute we dont get some weird configs and stuff )
 
 zig-out
-dump/*
-!dump/leveldb-src/
+dump
 .vscode
 .cursor
 .kiro

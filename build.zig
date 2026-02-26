@@ -65,8 +65,8 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    leveldb_lib.addIncludePath(b.path("dump/leveldb-src"));
-    leveldb_lib.addIncludePath(b.path("dump/leveldb-src/include"));
+    leveldb_lib.addIncludePath(b.path("libs/leveldb/src"));
+    leveldb_lib.addIncludePath(b.path("libs/leveldb/src/include"));
     leveldb_lib.linkLibCpp();
     leveldb_lib.linkLibrary(zlib_dep.artifact("z"));
 
@@ -76,11 +76,11 @@ pub fn build(b: *std.Build) void {
         &.{ "-std=c++17", "-DLEVELDB_PLATFORM_POSIX", "-DHAVE_FDATASYNC=1", "-DHAVE_O_CLOEXEC=1" };
 
     for (leveldb_sources) |src| {
-        leveldb_lib.addCSourceFile(.{ .file = b.path(b.fmt("dump/leveldb-src/{s}", .{src})), .flags = platform_flags });
+        leveldb_lib.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{src})), .flags = platform_flags });
     }
 
     const env_file: []const u8 = if (is_windows) "util/env_windows.cc" else "util/env_posix.cc";
-    leveldb_lib.addCSourceFile(.{ .file = b.path(b.fmt("dump/leveldb-src/{s}", .{env_file})), .flags = platform_flags });
+    leveldb_lib.addCSourceFile(.{ .file = b.path(b.fmt("libs/leveldb/src/{s}", .{env_file})), .flags = platform_flags });
 
     const nbt_mod = b.addModule("nbt", .{
         .root_source_file = b.path("src/nbt/root.zig"),
