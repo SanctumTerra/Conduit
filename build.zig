@@ -77,30 +77,6 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    const db_inspect = b.addExecutable(.{
-        .name = "db-inspect",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("dump/db-inspect.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{
-                .{ .name = "leveldb", .module = leveldb_mod },
-            },
-        }),
-    });
-    db_inspect.addLibraryPath(b.path("libs/leveldb/lib"));
-    db_inspect.linkSystemLibrary("leveldb");
-    db_inspect.linkLibrary(zlib_dep.artifact("z"));
-    db_inspect.linkLibCpp();
-    b.installArtifact(db_inspect);
-
-    const inspect_step = b.step("inspect", "Run db-inspect");
-    const inspect_cmd = b.addRunArtifact(db_inspect);
-    inspect_step.dependOn(&inspect_cmd.step);
-    if (b.args) |args| {
-        inspect_cmd.addArgs(args);
-    }
-
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
