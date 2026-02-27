@@ -8,6 +8,9 @@ pub const ServerProperties = struct {
     max_players: u32 = 120,
     online_mode: bool = true,
     max_tps: u32 = 20,
+    max_view_distance: u32 = 16,
+    simulation_distance: u32 = 4,
+    default_group: []const u8 = "operator",
 
     allocator: std.mem.Allocator,
     _allocated_strings: std.ArrayListUnmanaged([]const u8) = .{},
@@ -19,6 +22,9 @@ pub const ServerProperties = struct {
         .max_players = "Max Player count on the server",
         .online_mode = "Whether to use online mode (WIP)",
         .max_tps = "Max tps",
+        .max_view_distance = "Max view distance in chunks",
+        .simulation_distance = "Simulation distance in chunks (chunks within this range are kept loaded)",
+        .default_group = "Default permission group for new players",
     };
 
     pub fn load(allocator: std.mem.Allocator, path: []const u8) !ServerProperties {

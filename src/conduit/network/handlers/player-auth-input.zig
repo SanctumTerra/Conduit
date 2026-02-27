@@ -69,6 +69,7 @@ pub fn handlePlayerAuthInput(
     for (snapshots) |other| {
         if (other.entity.runtime_id == player.entity.runtime_id) continue;
         if (!other.spawned) continue;
+        if (!other.visible_players.contains(player.entity.runtime_id)) continue;
         try network.sendPacket(other.connection, serialized);
     }
 }
@@ -85,17 +86,9 @@ fn handleItemUseTransaction(
     const world = network.conduit.getWorld("world") orelse return;
     const dimension = world.getDimension("overworld") orelse return;
 
-    if (dimension.getBlockPtr(transaction.blockPosition)) |cb| {
-        if (!cb.fireEvent(.Interact, .{ cb, player })) return;
-    } else {
-        const perm = dimension.getPermutation(transaction.blockPosition, 0) catch null;
-        if (perm) |p| {
-            if (p.state.contains("open_bit")) {
-                try applyTraitsForBlock(player.entity.allocator, dimension, transaction.blockPosition);
-                if (dimension.getBlockPtr(transaction.blockPosition)) |cb| {
-                    if (!cb.fireEvent(.Interact, .{ cb, player })) return;
-                }
-            }
+    if (!player.entity.flags.getFlag(.Sneaking)) {
+        if (dimension.getBlockPtr(transaction.blockPosition)) |clicked_block| {
+            if (!clicked_block.fireEvent(.Interact, .{ clicked_block, player })) return;
         }
     }
 

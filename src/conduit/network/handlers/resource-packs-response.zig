@@ -35,7 +35,7 @@ pub fn handleResourcePack(
         },
         .Refused => {
             if (network.conduit.getPlayerByConnection(connection)) |player| {
-                try player.disconnect();
+                try player.disconnect(null);
             }
         },
         .SendPacks => {},
@@ -109,7 +109,7 @@ pub fn handleResourcePack(
                         .experimentsPreviouslyToggled = false,
                         .bonusChest = false,
                         .mapEnabled = false,
-                        .permissionLevel = .Member,
+                        .permissionLevel = .Operator,
                         .serverChunkTickRange = 4,
                         .hasLockedBehaviorPack = false,
                         .hasLockedResourcePack = false,
@@ -207,6 +207,15 @@ pub fn handleResourcePack(
                     try network.sendPacket(player.connection, serialized);
                 }
 
+                // AvailableCommandsPacket
+                {
+                    var str = BinaryStream.init(network.allocator, null, null);
+                    defer str.deinit();
+
+                    const serialized = try network.conduit.command_registry.buildAvailableCommandsPacket(&str);
+                    try network.sendPacket(player.connection, serialized);
+                }
+
                 // SetActorDataPacket
                 {
                     var str = BinaryStream.init(network.allocator, null, null);
@@ -238,6 +247,55 @@ pub fn handleResourcePack(
                 }
 
                 // PlayStatusPacket
+                {
+                    var str = BinaryStream.init(network.allocator, null, null);
+                    defer str.deinit();
+
+                    const AbilitySet = Protocol.AbilitySet;
+                    const abilities = try network.allocator.alloc(AbilitySet, 19);
+                    abilities[0] = .{ .ability = .Build, .value = true };
+                    abilities[1] = .{ .ability = .Mine, .value = true };
+                    abilities[2] = .{ .ability = .DoorsAndSwitches, .value = true };
+                    abilities[3] = .{ .ability = .OpenContainers, .value = true };
+                    abilities[4] = .{ .ability = .AttackPlayers, .value = true };
+                    abilities[5] = .{ .ability = .AttackMobs, .value = true };
+                    abilities[6] = .{ .ability = .OperatorCommands, .value = true };
+                    abilities[7] = .{ .ability = .Teleport, .value = true };
+                    abilities[8] = .{ .ability = .Invulnerable, .value = true };
+                    abilities[9] = .{ .ability = .Flying, .value = false };
+                    abilities[10] = .{ .ability = .MayFly, .value = true };
+                    abilities[11] = .{ .ability = .InstantBuild, .value = true };
+                    abilities[12] = .{ .ability = .Lightning, .value = false };
+                    abilities[13] = .{ .ability = .FlySpeed, .value = true };
+                    abilities[14] = .{ .ability = .WalkSpeed, .value = true };
+                    abilities[15] = .{ .ability = .Muted, .value = false };
+                    abilities[16] = .{ .ability = .WorldBuilder, .value = false };
+                    abilities[17] = .{ .ability = .NoClip, .value = false };
+                    abilities[18] = .{ .ability = .PrivilegedBuilder, .value = false };
+
+                    const layers = try network.allocator.alloc(Protocol.AbilityLayer, 1);
+                    layers[0] = .{
+                        .layer_type = @intFromEnum(Protocol.AbilityLayerType.Base),
+                        .abilities = abilities,
+                        .fly_speed = 0.05,
+                        .vertical_fly_speed = 1.0,
+                        .walk_speed = 0.1,
+                    };
+
+                    var packet = Protocol.UpdateAbilitiesPacket.init(
+                        network.allocator,
+                        player.entity.runtime_id,
+                        @intFromEnum(Protocol.PermissionLevel.Operator),
+                        1,
+                        layers,
+                    );
+                    defer packet.deinit();
+
+                    const serialized = try packet.serialize(&str);
+                    try network.sendPacket(player.connection, serialized);
+                }
+
+                // PlayStatusPacket - PlayerSpawn
                 {
                     var str = BinaryStream.init(network.allocator, null, null);
                     defer str.deinit();

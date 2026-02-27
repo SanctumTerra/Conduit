@@ -68,6 +68,22 @@ pub fn handleLogin(
         } else |_| {}
     }
 
+    if (network.conduit.ban_manager.isBanned(data.identity_data.display_name) or
+        network.conduit.ban_manager.isBannedByXuid(data.identity_data.xuid))
+    {
+        var str = BinaryStream.init(network.allocator, null, null);
+        defer str.deinit();
+        var disconnect = Protocol.DisconnectPacket{
+            .hideScreen = false,
+            .reason = .Kicked,
+            .message = "You are banned from this server.",
+            .filtered = "You are banned from this server.",
+        };
+        const serialized = try disconnect.serialize(&str);
+        try network.sendPacket(connection, serialized);
+        return;
+    }
+
     const player = try network.allocator.create(Player);
     errdefer network.allocator.destroy(player);
     try player.init(

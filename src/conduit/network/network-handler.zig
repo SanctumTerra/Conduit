@@ -24,6 +24,7 @@ const handleContainerClose = @import("./handlers/container-close.zig").handleCon
 const handleInventoryTransaction = @import("./handlers/inventory-transaction.zig").handleInventoryTransaction;
 const handleItemStackRequest = @import("./handlers/item-stack-request.zig").handleItemStackRequest;
 const handlePlayerAction = @import("./handlers/player-action.zig").handlePlayerAction;
+const handleCommandRequest = @import("./handlers/command-request.zig").handleCommandRequest;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
@@ -54,7 +55,7 @@ pub const NetworkHandler = struct {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
         const player = self.conduit.getPlayerByConnection(connection) orelse return;
         Raknet.Logger.INFO("Player {s} has disconnected.", .{player.username});
-        player.disconnect() catch |err| {
+        player.disconnect(null) catch |err| {
             Raknet.Logger.ERROR("Failed to disconnect player: {any}", .{err});
         };
     }
@@ -184,6 +185,13 @@ pub const NetworkHandler = struct {
                     &stream,
                 ) catch |err| {
                     Raknet.Logger.ERROR("PlayerAction error: {any}", .{err});
+                },
+                Packet.CommandRequest => handleCommandRequest(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("CommandRequest error: {any}", .{err});
                 },
                 Packet.PacketViolationWarning => handlePacketViolationWarning(
                     self,

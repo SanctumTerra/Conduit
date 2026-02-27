@@ -11,7 +11,7 @@ pub fn handleRequestChunkRadius(
     const packet = try Protocol.RequestChunkRadiusPacket.deserialize(stream);
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
 
-    const max_radius: i32 = 16;
+    const max_radius: i32 = @intCast(network.conduit.config.max_view_distance);
     player.view_distance = if (packet.radius > max_radius) max_radius else packet.radius;
 
     Raknet.Logger.INFO("Player {s} requested chunk radius: {d}, set to: {d}", .{

@@ -26,6 +26,7 @@ pub fn handleAnimate(
     for (snapshots) |other| {
         if (other.entity.runtime_id == player.entity.runtime_id) continue;
         if (!other.spawned) continue;
+        if (!other.visible_players.contains(player.entity.runtime_id)) continue;
         try network.sendPacket(other.connection, serialized);
     }
 }

@@ -11,6 +11,7 @@ const ServerProperties = @import("./config.zig").ServerProperties;
 const EntityType = @import("./entity/entity-type.zig").EntityType;
 const EntityTypeRegistry = @import("./entity/entity-type-registry.zig");
 const Entity = @import("./entity/entity.zig").Entity;
+const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
 
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
@@ -22,10 +23,16 @@ const OpenBitTrait = @import("./world/block/traits/open-bit.zig").OpenBitTrait;
 const LevelDBProvider = @import("./world/provider/leveldb-provider.zig").LevelDBProvider;
 const WorldProvider = @import("./world/provider/world-provider.zig").WorldProvider;
 
+const EntityTraits = @import("./entity/traits/root.zig");
+const GravityTrait = EntityTraits.GravityTrait;
+const HealthTrait = EntityTraits.HealthTrait;
+
 const ItemPalette = @import("./items/item-palette.zig");
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
-const TaskQueue = @import("./tasks.zig").TaskQueue;
-const ThreadedTaskQueue = @import("./threaded-tasks.zig").ThreadedTaskQueue;
+const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
+const ThreadedTaskQueue = @import("./tasks/threaded-tasks.zig").ThreadedTaskQueue;
+const BanManager = @import("./network/ban-manager.zig").BanManager;
+const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
 
 pub const Conduit = struct {
     allocator: std.mem.Allocator,
@@ -46,6 +53,9 @@ pub const Conduit = struct {
     current_tps: f64 = 20.0,
     tasks: TaskQueue,
     threaded_tasks: ThreadedTaskQueue,
+    command_registry: CommandRegistry,
+    ban_manager: BanManager,
+    permission_manager: PermissionManager,
 
     pub fn init(allocator: std.mem.Allocator) !Conduit {
         const config = try ServerProperties.load(allocator, "server.properties");
@@ -69,6 +79,7 @@ pub const Conduit = struct {
                     .name = config.motd,
                     .gamemode = "Creative",
                 },
+                .max_mtu = 1028,
             }),
             .players = std.AutoHashMap(i64, *Player).init(allocator),
             .connection_map = std.AutoHashMap(usize, *Player).init(allocator),
@@ -80,6 +91,9 @@ pub const Conduit = struct {
             .network = undefined,
             .tasks = TaskQueue.init(allocator),
             .threaded_tasks = ThreadedTaskQueue.init(allocator),
+            .command_registry = CommandRegistry.init(allocator),
+            .ban_manager = BanManager.init(allocator, "banned-players.json"),
+            .permission_manager = PermissionManager.init(allocator, "permissions.json", config.default_group),
         };
     }
 
@@ -91,6 +105,11 @@ pub const Conduit = struct {
         try UpperBlockTrait.registerForState("upper_block_bit");
         try OpenBitTrait.registerForState("open_bit");
         const count = try loadBlockPermutations(self.allocator);
+        Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
+
+        EntityTraits.initEntityTraitRegistry(self.allocator);
+        try GravityTrait.register();
+        try HealthTrait.register();
         Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
 
         try ItemPalette.initRegistry(self.allocator);
@@ -116,6 +135,7 @@ pub const Conduit = struct {
         const leveldb_provider = try LevelDBProvider.init(self.allocator, "worlds/world/db");
         var world = try self.createWorld("world", leveldb_provider.asProvider());
         const dim = try world.createDimension("overworld", .Overworld, threaded);
+        dim.simulation_distance = @intCast(self.config.simulation_distance);
 
         if (readLevelDatSpawn(self.allocator, "worlds/world/level.dat")) |spawn| {
             dim.spawn_position = spawn;
@@ -123,6 +143,22 @@ pub const Conduit = struct {
         } else |_| {}
 
         self.network = try NetworkHandler.init(self);
+
+        const commands = .{
+            @import("./command/list/summon.zig"),
+            @import("./command/list/about.zig"),
+            @import("./command/list/stop.zig"),
+            @import("./command/list/tp.zig"),
+            @import("./command/list/gamemode.zig"),
+            @import("./command/list/kick.zig"),
+            @import("./command/list/ban.zig"),
+            @import("./command/list/give.zig"),
+            @import("./command/list/weather.zig"),
+        };
+        inline for (commands) |cmd| {
+            try cmd.register(&self.command_registry);
+        }
+
         self.raknet.setTickCallback(onTick, self);
         try self.threaded_tasks.start();
         var event = Events.types.ServerStartEvent{};
@@ -233,22 +269,12 @@ pub const Conduit = struct {
 
         if (self.tick_count % 20 == 0) {
             const avg_work_ns = self.work_time_accumulator / 20;
-            const avg_tasks_ns = self.tasks_time_accumulator / 20;
             self.work_time_accumulator = 0;
             self.tasks_time_accumulator = 0;
-
-            const avg_work_ms = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000.0;
-            const avg_tasks_ms = @as(f64, @floatFromInt(avg_tasks_ns)) / 1_000_000.0;
 
             if (avg_work_ns >= tick_budget_ns) {
                 const work_s: f64 = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000_000.0;
                 self.current_tps = @min(20.0, 1.0 / work_s);
-                Raknet.Logger.INFO("TPS: {d:.1} | tick: {d:.1}ms | tasks: {d:.1}ms | pending: {d}", .{
-                    self.current_tps,
-                    avg_work_ms,
-                    avg_tasks_ms,
-                    self.tasks.pending(),
-                });
             } else {
                 self.current_tps = 20.0;
             }
@@ -322,6 +348,7 @@ pub const Conduit = struct {
         self.raknet.deinit();
 
         deinitRegistries();
+        EntityTraits.deinitEntityTraitRegistry();
         ItemPalette.deinitRegistry();
         EntityTypeRegistry.EntityTypeRegistry.deinit();
         if (self.creative_content) |*cc| cc.deinit();
@@ -330,6 +357,9 @@ pub const Conduit = struct {
         self.network.deinit();
         self.tasks.deinit();
         self.threaded_tasks.deinit();
+        self.command_registry.deinit();
+        self.ban_manager.deinit();
+        self.permission_manager.deinit();
     }
 };
 
