@@ -39,12 +39,10 @@ pub const ThreadedGenerator = struct {
         self.allocator.destroy(self);
     }
 
-    /// Synchronous generation, bypasses thread pool
     pub fn generate(self: *ThreadedGenerator, x: i32, z: i32) !*Chunk {
         return self.generator.generate(self.allocator, x, z);
     }
 
-    /// Async generation via thread pool, blocks caller until done
     pub fn generateAsync(self: *ThreadedGenerator, x: i32, z: i32) !*Chunk {
         var request = GenerationRequest{
             .x = x,

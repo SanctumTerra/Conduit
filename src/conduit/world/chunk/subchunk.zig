@@ -1,4 +1,3 @@
-// subchunk.zig
 const std = @import("std");
 const BlockStorage = @import("./storage/block-storage.zig").BlockStorage;
 const BiomeStorage = @import("./storage/biome-storage.zig").BiomeStorage;

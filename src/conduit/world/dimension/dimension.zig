@@ -9,6 +9,7 @@ const TerrainGenerator = @import("../generator/terrain-generator.zig").TerrainGe
 const ThreadedGenerator = @import("../generator/threaded-generator.zig").ThreadedGenerator;
 const Entity = @import("../../entity/entity.zig").Entity;
 const EntityType = @import("../../entity/entity-type.zig").EntityType;
+const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
 
 pub const ChunkHash = i64;
 
@@ -102,8 +103,11 @@ pub const Dimension = struct {
     pub fn removeChunk(self: *Dimension, x: i32, z: i32) void {
         const hash = chunkHash(x, z);
         if (self.chunks.fetchRemove(hash)) |entry| {
-            self.world.provider.uncacheChunk(x, z, self);
             var chunk = entry.value;
+            if (chunk.dirty) {
+                self.world.provider.writeChunk(chunk, self) catch {};
+            }
+            self.world.provider.uncacheChunk(x, z, self);
             chunk.deinit();
             self.allocator.destroy(chunk);
         }
@@ -131,8 +135,11 @@ pub const Dimension = struct {
             if (!still_needed) {
                 if (self.chunks.fetchRemove(h)) |entry| {
                     const coords2 = Protocol.ChunkCoords.unhash(h);
-                    self.world.provider.uncacheChunk(coords2.x, coords2.z, self);
                     var chunk = entry.value;
+                    if (chunk.dirty) {
+                        self.world.provider.writeChunk(chunk, self) catch {};
+                    }
+                    self.world.provider.uncacheChunk(coords2.x, coords2.z, self);
                     chunk.deinit();
                     self.allocator.destroy(chunk);
                 }
@@ -207,9 +214,16 @@ pub const Dimension = struct {
     }
 
     pub fn spawnEntity(self: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f) !*Entity {
+        return self.spawnEntityWithOptions(entity_type, position, "", false);
+    }
+
+    pub fn spawnEntityWithOptions(self: *Dimension, entity_type: *const EntityType, position: Protocol.Vector3f, name_tag: []const u8, nametag_always_visible: bool) !*Entity {
         const entity = try self.allocator.create(Entity);
         entity.* = Entity.init(self.allocator, entity_type, self);
         entity.position = position;
+        entity.name_tag = name_tag;
+        entity.nametag_always_visible = nametag_always_visible;
+        try applyGlobalTraits(self.allocator, entity);
         try self.entities.put(entity.runtime_id, entity);
         try self.broadcastAddEntity(entity);
         return entity;
@@ -227,8 +241,27 @@ pub const Dimension = struct {
         var stream = BinaryStream.init(self.allocator, null, null);
         defer stream.deinit();
 
-        const data = try entity.flags.buildDataItems(self.allocator);
-        defer self.allocator.free(data);
+        const flags_data = try entity.flags.buildDataItems(self.allocator);
+        defer self.allocator.free(flags_data);
+
+        var metadata = std.ArrayList(Protocol.DataItem){ .items = &.{}, .capacity = 0 };
+        defer if (metadata.capacity > 0) metadata.deinit(self.allocator);
+
+        for (flags_data) |item| {
+            try metadata.append(self.allocator, item);
+        }
+
+        if (entity.name_tag.len > 0) {
+            try metadata.append(self.allocator, Protocol.DataItem.init(
+                Protocol.ActorDataId.Name,
+                .String,
+                .{ .String = entity.name_tag },
+            ));
+            try metadata.append(self.allocator, Protocol.DataItem.initByte(
+                Protocol.ActorDataId.AlwaysShowNameTag,
+                if (entity.nametag_always_visible) 1 else 0,
+            ));
+        }
 
         const packet = Protocol.AddEntityPacket{
             .uniqueEntityId = entity.unique_id,
@@ -239,7 +272,7 @@ pub const Dimension = struct {
             .yaw = entity.rotation.x,
             .headYaw = entity.head_yaw,
             .bodyYaw = entity.rotation.x,
-            .entityMetadata = data,
+            .entityMetadata = metadata.items,
             .entityProperties = Protocol.PropertySyncData.init(self.allocator),
         };
 
