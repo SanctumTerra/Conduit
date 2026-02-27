@@ -18,6 +18,7 @@ pub fn main() !void {
 
     try conduit.start();
 
-    std.Thread.sleep(std.time.ns_per_min * 5);
-    try conduit.stop();
+    while (conduit.raknet.running) {
+        std.Thread.sleep(std.time.ns_per_s);
+    }
 }

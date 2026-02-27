@@ -28,8 +28,8 @@ Building Conduit in Zig means we can deliver the performance we need.
 - [x] Entity Trait System
 - [ ] Entity Drops
 - [x] LevelDB
+- [x] Command System (tp, gamemode, kick, ban, give, weather, summon, stop, about)
 - [ ] Plugin API
-- [ ] Command System
 - [ ] Resource Pack loading
 - [ ] Multi World System
 

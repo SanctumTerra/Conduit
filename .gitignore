@@ -15,3 +15,5 @@ dump
 server.properties
 worlds/
 libs/leveldb/lib/
+permissions.json
+banned-players.json
