@@ -2,10 +2,9 @@ const std = @import("std");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 
 pub const Uuid = struct {
-    pub fn read(stream: *BinaryStream) ![]const u8 {
-        const start_pos = stream.offset;
-        _ = try stream.read(16);
-        return stream.buffer.items[start_pos..stream.offset];
+    pub fn read(stream: *BinaryStream) []const u8 {
+        const data = stream.read(16);
+        return data;
     }
 
     pub fn write(stream: *BinaryStream, value: []const u8) !void {

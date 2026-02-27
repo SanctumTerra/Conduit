@@ -4,6 +4,10 @@ const Vector3f = @import("../types/vector3f.zig").Vector3f;
 
 pub const LevelEvent = enum(i32) {
     ParticlesDestroyBlock = 2001,
+    StartRain = 3001,
+    StartThunder = 3002,
+    StopRain = 3003,
+    StopThunder = 3004,
     StartBlockCracking = 3600,
     StopBlockCracking = 3601,
     UpdateBlockCracking = 3602,
@@ -19,9 +23,7 @@ pub const LevelEventPacket = struct {
         try stream.writeVarInt(Packet.LevelEvent);
         try stream.writeZigZag(@intFromEnum(self.event));
         try Vector3f.write(stream, self.position);
-        const data_u32: u32 = @bitCast(self.data);
-        const zigzag: u32 = (data_u32 << 1) ^ (data_u32 >> 31);
-        try stream.writeVarInt(zigzag);
+        try stream.writeZigZag(self.data);
         return stream.getBuffer();
     }
 };

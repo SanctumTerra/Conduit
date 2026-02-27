@@ -1,8 +1,5 @@
-// Data module - provides access to game data (blocks, items, entities, etc.)
-
 const std = @import("std");
 
-// Embedded JSON data files
 pub const block_permutations_json = @embedFile("json/block_permutations.json");
 pub const block_types_json = @embedFile("json/block_types.json");
 pub const block_states_json = @embedFile("json/block_states.json");
@@ -18,5 +15,4 @@ pub const shaped_json = @embedFile("json/shaped.json");
 pub const shapeless_json = @embedFile("json/shapeless.json");
 pub const tool_types_json = @embedFile("json/tool_types.json");
 
-// Re-export loaders
 pub const BlockPermutationLoader = @import("loaders/block-permutation-loader.zig").BlockPermutationLoader;
