@@ -18,3 +18,5 @@ pub const gravity = @import("./gravity.zig");
 pub const GravityTrait = gravity.GravityTrait;
 pub const health = @import("./health.zig");
 pub const HealthTrait = health.HealthTrait;
+pub const item_entity = @import("./item-entity.zig");
+pub const ItemEntityTrait = item_entity.ItemEntityTrait;

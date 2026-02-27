@@ -4,6 +4,7 @@ const BinaryStream = @import("BinaryStream").BinaryStream;
 const NBT = @import("nbt");
 const CompoundTag = NBT.CompoundTag;
 const ReadWriteOptions = NBT.ReadWriteOptions;
+const Protocol = @import("protocol");
 const WorldProvider = @import("./world-provider.zig").WorldProvider;
 const Chunk = @import("../chunk/chunk.zig").Chunk;
 const SubChunk = @import("../chunk/subchunk.zig").SubChunk;
@@ -19,6 +20,9 @@ const TAG_SUBCHUNK_PREFIX: u8 = 47;
 const TAG_VERSION: u8 = 44;
 const TAG_VERSION_OLD: u8 = 118;
 const TAG_BLOCK_ENTITY: u8 = 49;
+
+const trait_mod = @import("../block/traits/trait.zig");
+const Block = @import("../block/block.zig").Block;
 
 pub const LevelDBProvider = struct {
     allocator: std.mem.Allocator,
@@ -212,6 +216,110 @@ pub const LevelDBProvider = struct {
         return result;
     }
 
+    pub fn writeBlockEntities(self: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !void {
+        const dim_index = dimensionIndex(dimension);
+        const key = blockEntityKey(chunk.x, chunk.z, dim_index);
+
+        var tags = std.ArrayList(NBT.Tag){ .items = &.{}, .capacity = 0 };
+        defer {
+            for (tags.items) |*t| {
+                switch (t.*) {
+                    .Compound => |*c| c.deinit(self.allocator),
+                    else => {},
+                }
+            }
+            tags.deinit(self.allocator);
+        }
+
+        var block_iter = dimension.blocks.iterator();
+        while (block_iter.next()) |entry| {
+            const block = entry.value_ptr.*;
+            const bx = block.position.x >> 4;
+            const bz = block.position.z >> 4;
+            if (bx != chunk.x or bz != chunk.z) continue;
+
+            var tag = CompoundTag.init(self.allocator, null);
+            tag.set("x", .{ .Int = NBT.IntTag.init(block.position.x, null) }) catch {
+                tag.deinit(self.allocator);
+                continue;
+            };
+            tag.set("y", .{ .Int = NBT.IntTag.init(block.position.y, null) }) catch {
+                tag.deinit(self.allocator);
+                continue;
+            };
+            tag.set("z", .{ .Int = NBT.IntTag.init(block.position.z, null) }) catch {
+                tag.deinit(self.allocator);
+                continue;
+            };
+            const id_str = self.allocator.dupe(u8, block.getIdentifier()) catch {
+                tag.deinit(self.allocator);
+                continue;
+            };
+            tag.set("id", .{ .String = NBT.StringTag.init(id_str, null) }) catch {
+                tag.deinit(self.allocator);
+                continue;
+            };
+
+            block.fireEvent(.Serialize, .{&tag});
+
+            std.debug.print("writeBlockEntities: saving block {s} at ({d},{d},{d})\n", .{ block.getIdentifier(), block.position.x, block.position.y, block.position.z });
+
+            tags.append(self.allocator, .{ .Compound = tag }) catch {
+                tag.deinit(self.allocator);
+                continue;
+            };
+        }
+
+        if (tags.items.len == 0) {
+            self.db.delete(key.slice()) catch {};
+            return;
+        }
+
+        var stream = BinaryStream.init(self.allocator, null, null);
+        defer stream.deinit();
+        for (tags.items) |*t| {
+            switch (t.*) {
+                .Compound => |*c| CompoundTag.write(&stream, c, ReadWriteOptions.default) catch continue,
+                else => {},
+            }
+        }
+        try self.db.put(key.slice(), stream.getBuffer());
+    }
+
+    pub fn readBlockEntities(self: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !void {
+        const dim_index = dimensionIndex(dimension);
+        const key = blockEntityKey(chunk.x, chunk.z, dim_index);
+        const data = self.db.get(key.slice()) orelse return;
+        defer LevelDB.DB.freeValue(data);
+
+        var stream = BinaryStream.init(self.allocator, data, null);
+        while (stream.offset < data.len) {
+            var tag = CompoundTag.read(&stream, self.allocator, ReadWriteOptions.default) catch break;
+            defer tag.deinit(self.allocator);
+
+            const x = switch (tag.get("x") orelse continue) {
+                .Int => |t| t.value,
+                else => continue,
+            };
+            const y = switch (tag.get("y") orelse continue) {
+                .Int => |t| t.value,
+                else => continue,
+            };
+            const z = switch (tag.get("z") orelse continue) {
+                .Int => |t| t.value,
+                else => continue,
+            };
+
+            const pos = Protocol.BlockPosition{ .x = x, .y = y, .z = z };
+            std.debug.print("readBlockEntities: loading block at ({d},{d},{d})\n", .{ x, y, z });
+            trait_mod.applyTraitsForBlock(self.allocator, dimension, pos) catch continue;
+
+            if (dimension.getBlockPtr(pos)) |block| {
+                block.fireEvent(.Deserialize, .{&tag});
+            }
+        }
+    }
+
     pub fn readBuffer(self: *LevelDBProvider, key: []const u8) !?[]const u8 {
         const val = self.db.get(key) orelse return null;
         const owned = try self.allocator.dupe(u8, val);
@@ -276,6 +384,8 @@ pub const LevelDBProvider = struct {
         .writePlayer = vtableWritePlayer,
         .readPlayer = vtableReadPlayer,
         .writeChunkEntities = vtableWriteChunkEntities,
+        .writeBlockEntities = vtableWriteBlockEntities,
+        .readBlockEntities = vtableReadBlockEntities,
         .deinitFn = vtableDeinit,
     };
 
@@ -322,6 +432,16 @@ pub const LevelDBProvider = struct {
     fn vtableWriteChunkEntities(ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void {
         const self: *LevelDBProvider = @ptrCast(@alignCast(ptr));
         return self.writeChunkEntities(chunk, dimension);
+    }
+
+    fn vtableWriteBlockEntities(ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void {
+        const self: *LevelDBProvider = @ptrCast(@alignCast(ptr));
+        return self.writeBlockEntities(chunk, dimension);
+    }
+
+    fn vtableReadBlockEntities(ptr: *anyopaque, chunk: *Chunk, dimension: *Dimension) anyerror!void {
+        const self: *LevelDBProvider = @ptrCast(@alignCast(ptr));
+        return self.readBlockEntities(chunk, dimension);
     }
 
     fn vtableDeinit(ptr: *anyopaque) void {
@@ -382,6 +502,15 @@ fn versionKeyOld(x: i32, z: i32, dim_index: i32) KeyBuf {
     const base = chunkKeyBase(x, z, dim_index);
     @memcpy(key.buf[0..base.len], base.buf[0..base.len]);
     key.buf[base.len] = TAG_VERSION_OLD;
+    key.len = base.len + 1;
+    return key;
+}
+
+fn blockEntityKey(x: i32, z: i32, dim_index: i32) KeyBuf {
+    var key = KeyBuf{};
+    const base = chunkKeyBase(x, z, dim_index);
+    @memcpy(key.buf[0..base.len], base.buf[0..base.len]);
+    key.buf[base.len] = TAG_BLOCK_ENTITY;
     key.len = base.len + 1;
     return key;
 }

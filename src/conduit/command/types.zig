@@ -51,6 +51,7 @@ pub const CommandOverload = struct {
 pub const CommandEnum = struct {
     name: []const u8,
     values: []const []const u8,
+    owned: bool = false,
 };
 
 pub const SoftEnum = struct {

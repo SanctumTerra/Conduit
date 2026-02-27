@@ -49,7 +49,7 @@ pub const CommandRegistry = struct {
         self.commands.deinit();
         self.alias_map.deinit();
         for (self.enums.items) |e| {
-            self.allocator.free(e.values);
+            if (e.owned) self.allocator.free(e.values);
         }
         if (self.enums.capacity > 0) self.enums.deinit(self.allocator);
         if (self.soft_enums.capacity > 0) self.soft_enums.deinit(self.allocator);

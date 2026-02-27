@@ -59,6 +59,7 @@ fn registerEntityEnum(registry: *CommandRegistry) !u32 {
     return try registry.registerEnum(.{
         .name = "EntityType",
         .values = values,
+        .owned = true,
     });
 }
 

@@ -6,8 +6,7 @@ const Player = @import("../../../player/player.zig").Player;
 const BlockContainer = @import("../../../container/block-container.zig").BlockContainer;
 const CompoundTag = @import("nbt").CompoundTag;
 const trait_mod = @import("./trait.zig");
-
-// TODO: Add chest saving to leveldb once implemented
+const serialization = @import("../../provider/serialization.zig");
 
 pub const State = struct {
     container: ?BlockContainer = null,
@@ -16,13 +15,35 @@ pub const State = struct {
 };
 
 fn onAttach(state: *State, block: *Block) void {
-    state.container = BlockContainer.init(block.allocator, .Container, 27) catch return;
+    if (state.container == null) {
+        state.container = BlockContainer.init(block.allocator, .Container, 27) catch return;
+    }
     tryPairAdjacent(state, block);
 }
 
 fn onDetach(state: *State, _: *Block) void {
     if (state.container) |*c| c.deinit();
     state.container = null;
+}
+
+fn onSerialize(state: *State, tag: *CompoundTag) void {
+    const container = &(state.container orelse return);
+    const list = serialization.serializeContainer(tag.allocator, &container.base) catch return;
+    tag.set("Items", .{ .List = list }) catch {};
+    if (state.pair_position) |pair| {
+        tag.set("pairx", .{ .Int = @import("nbt").IntTag.init(pair.x, null) }) catch {};
+        tag.set("pairz", .{ .Int = @import("nbt").IntTag.init(pair.z, null) }) catch {};
+        tag.set("pairlead", .{ .Byte = @import("nbt").ByteTag.init(if (state.is_parent) 1 else 0, null) }) catch {};
+    }
+}
+
+fn onDeserialize(state: *State, tag: *const CompoundTag) void {
+    const container = &(state.container orelse return);
+    const items_tag = tag.get("Items") orelse return;
+    switch (items_tag) {
+        .List => |list| serialization.deserializeContainer(container.base.allocator, &container.base, &list),
+        else => {},
+    }
 }
 
 fn onInteract(state: *State, block: *Block, player: *Player) bool {
@@ -219,4 +240,6 @@ pub const ChestTrait = trait_mod.BlockTrait(State, .{
     .onDetach = &onDetach,
     .onInteract = &onInteract,
     .onBreak = &onBreak,
+    .onSerialize = &onSerialize,
+    .onDeserialize = &onDeserialize,
 });

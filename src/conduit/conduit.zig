@@ -110,7 +110,6 @@ pub const Conduit = struct {
         EntityTraits.initEntityTraitRegistry(self.allocator);
         try GravityTrait.register();
         try HealthTrait.register();
-        Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
 
         try ItemPalette.initRegistry(self.allocator);
         const item_count = try ItemPalette.loadItemTypes(self.allocator);
@@ -233,6 +232,12 @@ pub const Conduit = struct {
         return self.snapshot_buf.items;
     }
 
+    pub fn getPlayerCount(self: *Conduit) usize {
+        self.players_mutex.lock();
+        defer self.players_mutex.unlock();
+        return self.players.count();
+    }
+
     fn onTick(context: ?*anyopaque) void {
         const self = @as(*Conduit, @ptrCast(@alignCast(context)));
         const work_start = std.time.nanoTimestamp();
@@ -254,6 +259,7 @@ pub const Conduit = struct {
                 while (ent_it.next()) |entity| {
                     entity.*.fireEvent(.Tick, .{entity.*});
                 }
+                dim.*.flushPendingRemovals();
             }
         }
 
@@ -306,6 +312,7 @@ pub const Conduit = struct {
                 var chunk_iter = dim.*.chunks.valueIterator();
                 while (chunk_iter.next()) |chunk| {
                     world.*.provider.writeChunkEntities(chunk.*, dim.*) catch {};
+                    world.*.provider.writeBlockEntities(chunk.*, dim.*) catch {};
                     if (chunk.*.dirty) {
                         world.*.provider.writeChunk(chunk.*, dim.*) catch continue;
                     }
@@ -327,6 +334,7 @@ pub const Conduit = struct {
             self.raknet.tick_thread = null;
         }
 
+        self.threaded_tasks.deinit();
         self.saveAllWorlds();
 
         var it = self.players.valueIterator();
@@ -356,7 +364,6 @@ pub const Conduit = struct {
         self.events.deinit();
         self.network.deinit();
         self.tasks.deinit();
-        self.threaded_tasks.deinit();
         self.command_registry.deinit();
         self.ban_manager.deinit();
         self.permission_manager.deinit();

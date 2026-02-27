@@ -140,6 +140,7 @@ pub const GravityTrait = EntityTrait(State, .{
         "minecraft:armadillo",
         "minecraft:bogged",
         "minecraft:breeze",
+        "minecraft:item",
     },
     .default_state = .{
         .force = -0.08,

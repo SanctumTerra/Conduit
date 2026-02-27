@@ -13,6 +13,9 @@ const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTra
 
 const ItemStack = @import("../../items/item-stack.zig").ItemStack;
 const ItemType = @import("../../items/item-type.zig").ItemType;
+const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
+const ItemEntityTrait = @import("../../entity/traits/item-entity.zig").ItemEntityTrait;
+const tryMergeNearby = @import("../../entity/traits/item-entity.zig").tryMergeNearby;
 
 pub const ChunkHash = i64;
 
@@ -35,6 +38,7 @@ pub const Dimension = struct {
     chunks: std.AutoHashMap(ChunkHash, *Chunk),
     entities: std.AutoHashMap(i64, *Entity),
     blocks: std.AutoHashMap(i64, *Block),
+    pending_removals: std.ArrayList(i64),
     spawn_position: Protocol.BlockPosition,
     simulation_distance: i32,
     generator: ?*ThreadedGenerator,
@@ -54,6 +58,7 @@ pub const Dimension = struct {
             .chunks = std.AutoHashMap(ChunkHash, *Chunk).init(allocator),
             .entities = std.AutoHashMap(i64, *Entity).init(allocator),
             .blocks = std.AutoHashMap(i64, *Block).init(allocator),
+            .pending_removals = std.ArrayList(i64){ .items = &.{}, .capacity = 0 },
             .spawn_position = Protocol.BlockPosition{
                 .x = 0,
                 .y = 32767,
@@ -78,6 +83,8 @@ pub const Dimension = struct {
             self.allocator.destroy(entity.*);
         }
         self.entities.deinit();
+
+        self.pending_removals.deinit(self.allocator);
 
         var iter = self.chunks.valueIterator();
         while (iter.next()) |chunk| {
@@ -107,6 +114,7 @@ pub const Dimension = struct {
         };
 
         try self.chunks.put(hash, chunk);
+        self.world.provider.readBlockEntities(chunk, self) catch {};
         return chunk;
     }
 
@@ -114,6 +122,7 @@ pub const Dimension = struct {
         const hash = chunkHash(x, z);
         if (self.chunks.fetchRemove(hash)) |entry| {
             var chunk = entry.value;
+            self.world.provider.writeBlockEntities(chunk, self) catch {};
             if (chunk.dirty) {
                 self.world.provider.writeChunk(chunk, self) catch {};
             }
@@ -146,6 +155,7 @@ pub const Dimension = struct {
                 if (self.chunks.fetchRemove(h)) |entry| {
                     const coords2 = Protocol.ChunkCoords.unhash(h);
                     var chunk = entry.value;
+                    self.world.provider.writeBlockEntities(chunk, self) catch {};
                     if (chunk.dirty) {
                         self.world.provider.writeChunk(chunk, self) catch {};
                     }
@@ -246,16 +256,76 @@ pub const Dimension = struct {
         self.allocator.destroy(entity);
     }
 
+    pub fn flushPendingRemovals(self: *Dimension) void {
+        for (self.pending_removals.items) |rid| {
+            if (self.entities.fetchRemove(rid)) |entry| {
+                var entity = entry.value;
+                self.broadcastRemoveEntity(entity) catch {};
+                entity.deinit();
+                self.allocator.destroy(entity);
+            }
+        }
+        self.pending_removals.clearRetainingCapacity();
+    }
+
     pub fn spawnItemEntity(self: *Dimension, item_type: *ItemType, count: u16, position: Protocol.Vector3f) !*Entity {
         const BinaryStream = @import("BinaryStream").BinaryStream;
+
+        if (tryMergeNearby(self, item_type.identifier, count, position)) |existing| {
+            const existing_state = existing.getTraitState(ItemEntityTrait) orelse return existing;
+            self.broadcastRemoveEntity(existing) catch {};
+
+            var merged_stack = ItemStack.init(self.allocator, item_type, .{ .stackSize = existing_state.count });
+            const merged_net = merged_stack.toNetworkStack();
+            defer merged_stack.deinit();
+
+            var stream = BinaryStream.init(self.allocator, null, null);
+            defer stream.deinit();
+
+            const packet = Protocol.AddItemActorPacket{
+                .uniqueEntityId = existing.unique_id,
+                .runtimeEntityId = @bitCast(existing.runtime_id),
+                .item = merged_net,
+                .position = existing.position,
+                .velocity = Protocol.Vector3f.init(0, 0, 0),
+            };
+            const serialized = try packet.serialize(&stream, self.allocator);
+
+            const conduit = self.world.conduit;
+            const snapshots = conduit.getPlayerSnapshots();
+            for (snapshots) |player| {
+                if (!player.spawned) continue;
+                conduit.network.sendPacket(player.connection, serialized) catch {};
+            }
+
+            return existing;
+        }
 
         const entity = try self.allocator.create(Entity);
         entity.* = Entity.init(self.allocator, &item_entity_type, self);
         entity.position = position;
+
+        const gravity = try GravityTrait.create(self.allocator, .{
+            .force = -0.04,
+            .falling_distance = 0,
+            .falling_ticks = 0,
+            .on_ground = false,
+        });
+        try entity.addTrait(gravity);
+
+        const pickup = try ItemEntityTrait.create(self.allocator, .{
+            .item_identifier = item_type.identifier,
+            .count = count,
+            .pickup_delay = 10,
+            .lifetime = 0,
+            .pending_remove = false,
+        });
+        try entity.addTrait(pickup);
+
         try self.entities.put(entity.runtime_id, entity);
 
         var item_stack = ItemStack.init(self.allocator, item_type, .{ .stackSize = count });
-        const net_item = item_stack.toNetworkInstance();
+        const net_item = item_stack.toNetworkStack();
         defer item_stack.deinit();
 
         var stream = BinaryStream.init(self.allocator, null, null);

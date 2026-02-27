@@ -355,6 +355,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
                         old_chunk.deinit();
                         allocator.destroy(old_chunk);
                     }
+                    dim.world.provider.readBlockEntities(chunk, dim) catch {};
                 } else {
                     var c = chunk;
                     c.deinit();

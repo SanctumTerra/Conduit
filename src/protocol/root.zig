@@ -120,6 +120,7 @@ pub const InventoryTransactionPacket = @import("./packets/inventory-transaction.
 pub const ItemStackRequestPacket = @import("./packets/item-stack-request.zig").ItemStackRequestPacket;
 pub const AddEntityPacket = @import("./packets/add-entity.zig").AddEntityPacket;
 pub const AddItemActorPacket = @import("./packets/add-item-actor.zig").AddItemActorPacket;
+pub const TakeItemActorPacket = @import("./packets/take-item-actor.zig").TakeItemActorPacket;
 pub const RemoveEntityPacket = @import("./packets/remove-entity.zig").RemoveEntityPacket;
 pub const ActorEventPacket = @import("./packets/actor-event.zig").ActorEventPacket;
 pub const ActorEventType = @import("./packets/actor-event.zig").ActorEventType;

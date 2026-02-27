@@ -126,7 +126,7 @@ pub const EntityContainer = struct {
         self.owner.network.sendPacket(self.owner.connection, serialized) catch {};
     }
 
-    fn sendOwnerContentUpdate(self: *EntityContainer) void {
+    pub fn sendOwnerContentUpdate(self: *EntityContainer) void {
         const items = self.base.allocator.alloc(Protocol.NetworkItemStackDescriptor, self.base.storage.len) catch return;
         defer self.base.allocator.free(items);
 
