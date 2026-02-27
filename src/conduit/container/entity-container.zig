@@ -42,6 +42,12 @@ pub const EntityContainer = struct {
         self.sendOwnerContentUpdate();
     }
 
+    pub fn addItem(self: *EntityContainer, item: ItemStack) bool {
+        const result = self.base.addItem(item);
+        self.sendOwnerContentUpdate();
+        return result;
+    }
+
     pub fn updateSlot(self: *EntityContainer, slot: u32) void {
         self.base.updateSlot(slot);
         self.sendOwnerSlotUpdate(slot);

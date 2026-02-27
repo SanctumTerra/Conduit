@@ -98,28 +98,35 @@ pub const Container = struct {
     }
 
     pub fn addItem(self: *Container, item: ItemStack) bool {
+        var remaining: u16 = item.stackSize;
+
         if (item.item_type.stackable) {
             for (self.storage, 0..) |*slot, i| {
+                if (remaining == 0) break;
                 if (slot.*) |*existing| {
                     if (existing.item_type == item.item_type and existing.stackSize < existing.item_type.max_stack_size) {
                         const space = existing.item_type.max_stack_size - existing.stackSize;
-                        const to_add = @min(space, item.stackSize);
+                        const to_add = @min(space, remaining);
                         existing.stackSize += to_add;
+                        remaining -= to_add;
                         self.updateSlot(@intCast(i));
-                        return true;
                     }
                 }
             }
         }
 
-        for (self.storage, 0..) |slot, i| {
-            if (slot == null) {
-                self.storage[i] = item;
-                self.updateSlot(@intCast(i));
-                return true;
-            }
+        while (remaining > 0) {
+            const empty_slot = for (self.storage, 0..) |slot, i| {
+                if (slot == null) break i;
+            } else break;
+
+            const to_place = @min(remaining, item.item_type.max_stack_size);
+            self.storage[empty_slot] = ItemStack.init(item.allocator, item.item_type, .{ .stackSize = to_place, .metadata = item.metadata });
+            remaining -= to_place;
+            self.updateSlot(@intCast(empty_slot));
         }
-        return false;
+
+        return remaining == 0;
     }
 
     pub fn removeItem(self: *Container, slot: u32, amount: u16) void {
