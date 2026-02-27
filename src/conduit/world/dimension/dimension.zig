@@ -11,11 +11,21 @@ const Entity = @import("../../entity/entity.zig").Entity;
 const EntityType = @import("../../entity/entity-type.zig").EntityType;
 const applyGlobalTraits = @import("../../entity/traits/root.zig").applyGlobalTraits;
 
+const ItemStack = @import("../../items/item-stack.zig").ItemStack;
+const ItemType = @import("../../items/item-type.zig").ItemType;
+
 pub const ChunkHash = i64;
 
 pub fn chunkHash(x: i32, z: i32) ChunkHash {
     return (@as(i64, x) << 32) | @as(i64, @as(u32, @bitCast(z)));
 }
+
+const item_entity_type = EntityType{
+    .identifier = "minecraft:item",
+    .network_id = 64,
+    .components = &.{},
+    .tags = &.{},
+};
 
 pub const Dimension = struct {
     world: *World,
@@ -234,6 +244,40 @@ pub const Dimension = struct {
         _ = self.entities.remove(entity.runtime_id);
         entity.deinit();
         self.allocator.destroy(entity);
+    }
+
+    pub fn spawnItemEntity(self: *Dimension, item_type: *ItemType, count: u16, position: Protocol.Vector3f) !*Entity {
+        const BinaryStream = @import("BinaryStream").BinaryStream;
+
+        const entity = try self.allocator.create(Entity);
+        entity.* = Entity.init(self.allocator, &item_entity_type, self);
+        entity.position = position;
+        try self.entities.put(entity.runtime_id, entity);
+
+        var item_stack = ItemStack.init(self.allocator, item_type, .{ .stackSize = count });
+        const net_item = item_stack.toNetworkInstance();
+        defer item_stack.deinit();
+
+        var stream = BinaryStream.init(self.allocator, null, null);
+        defer stream.deinit();
+
+        const packet = Protocol.AddItemActorPacket{
+            .uniqueEntityId = entity.unique_id,
+            .runtimeEntityId = @bitCast(entity.runtime_id),
+            .item = net_item,
+            .position = position,
+            .velocity = Protocol.Vector3f.init(0, 0.25, 0),
+        };
+        const serialized = try packet.serialize(&stream, self.allocator);
+
+        const conduit = self.world.conduit;
+        const snapshots = conduit.getPlayerSnapshots();
+        for (snapshots) |player| {
+            if (!player.spawned) continue;
+            conduit.network.sendPacket(player.connection, serialized) catch {};
+        }
+
+        return entity;
     }
 
     fn broadcastAddEntity(self: *Dimension, entity: *Entity) !void {

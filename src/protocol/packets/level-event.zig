@@ -23,7 +23,9 @@ pub const LevelEventPacket = struct {
         try stream.writeVarInt(Packet.LevelEvent);
         try stream.writeZigZag(@intFromEnum(self.event));
         try Vector3f.write(stream, self.position);
-        try stream.writeZigZag(self.data);
+        const v: i32 = self.data;
+        const encoded: u32 = @bitCast((v +% v) ^ (v >> 31));
+        try stream.writeVarInt(encoded);
         return stream.getBuffer();
     }
 };
