@@ -81,8 +81,10 @@ pub const EntityTraitInstance = struct {
 pub fn EntityTrait(comptime State: type, comptime config: EntityTraitConfig(State)) type {
     return struct {
         pub const identifier = config.identifier;
+        pub const entities = config.entities;
         pub const tags = config.tags;
         pub const components = config.components;
+        pub const default_state: ?State = config.default_state;
         pub const TraitState = State;
 
         pub const vtable = blk: {
@@ -104,6 +106,17 @@ pub fn EntityTrait(comptime State: type, comptime config: EntityTraitConfig(Stat
                 .ctx = @ptrCast(state),
                 .identifier = identifier,
             };
+        }
+
+        fn defaultFactory(allocator: std.mem.Allocator) !EntityTraitInstance {
+            return create(allocator, default_state orelse @compileError("default_state required for global entity trait registration"));
+        }
+
+        pub fn register() !void {
+            if (entities.len > 0) {
+                if (default_state == null) @compileError("default_state required for global entity trait registration");
+                try registerTraitForEntities(entities, &defaultFactory);
+            }
         }
 
         pub fn destroy(instance: EntityTraitInstance, allocator: std.mem.Allocator) void {
@@ -186,8 +199,10 @@ fn eventFromFieldName(comptime name: []const u8) ?Event {
 pub fn EntityTraitConfig(comptime State: type) type {
     return struct {
         identifier: []const u8,
+        entities: []const []const u8 = &.{},
         tags: []const []const u8 = &.{},
         components: []const []const u8 = &.{},
+        default_state: ?State = null,
         onAttach: ?*const fn (*State, *Entity) void = null,
         onDetach: ?*const fn (*State, *Entity) void = null,
         onTick: ?*const fn (*State, *Entity) void = null,
@@ -200,4 +215,47 @@ pub fn EntityTraitConfig(comptime State: type) type {
         onSerialize: ?*const fn (*State, *CompoundTag) void = null,
         onDeserialize: ?*const fn (*State, *const CompoundTag) void = null,
     };
+}
+
+pub const EntityTraitFactory = *const fn (std.mem.Allocator) error{OutOfMemory}!EntityTraitInstance;
+
+const FactoryList = std.ArrayListUnmanaged(EntityTraitFactory);
+
+var entity_trait_registry: std.StringHashMapUnmanaged(FactoryList) = .{};
+var registry_allocator: std.mem.Allocator = undefined;
+var registry_initialized: bool = false;
+
+pub fn initEntityTraitRegistry(allocator: std.mem.Allocator) void {
+    registry_allocator = allocator;
+    entity_trait_registry = .{};
+    registry_initialized = true;
+}
+
+pub fn deinitEntityTraitRegistry() void {
+    if (!registry_initialized) return;
+    var iter = entity_trait_registry.valueIterator();
+    while (iter.next()) |list| {
+        list.deinit(registry_allocator);
+    }
+    entity_trait_registry.deinit(registry_allocator);
+    registry_initialized = false;
+}
+
+pub fn registerTraitForEntities(comptime entities: []const []const u8, factory: EntityTraitFactory) !void {
+    inline for (entities) |entity_id| {
+        const gop = try entity_trait_registry.getOrPut(registry_allocator, entity_id);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .{};
+        }
+        try gop.value_ptr.append(registry_allocator, factory);
+    }
+}
+
+pub fn applyGlobalTraits(allocator: std.mem.Allocator, entity: *Entity) !void {
+    if (!registry_initialized) return;
+    const factories = entity_trait_registry.get(entity.entity_type.identifier) orelse return;
+    for (factories.items) |factory| {
+        const instance = try factory(allocator);
+        try entity.addTrait(instance);
+    }
 }

@@ -21,6 +21,10 @@ pub const EntityTypeRegistry = struct {
         return reg.serialized_packet;
     }
 
+    pub fn getRegistry() ?*EntityTypeRegistry {
+        return registry;
+    }
+
     pub fn deinit() void {
         if (registry) |reg| {
             var it = reg.types.iterator();

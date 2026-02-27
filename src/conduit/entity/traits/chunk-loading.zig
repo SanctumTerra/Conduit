@@ -8,7 +8,7 @@ const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const Conduit = @import("../../conduit.zig").Conduit;
 const Chunk = @import("../../world/chunk/chunk.zig").Chunk;
 const Raknet = @import("Raknet");
-const ThreadedTask = @import("../../threaded-tasks.zig").ThreadedTask;
+const ThreadedTask = @import("../../tasks/threaded-tasks.zig").ThreadedTask;
 const Compression = @import("../../network/compression/compression.zig").Compression;
 const CompressionOptions = @import("../../network/compression/options.zig").CompressionOptions;
 const WorldProvider = @import("../../world/provider/world-provider.zig").WorldProvider;
@@ -30,6 +30,8 @@ fn onTick(state: *State, entity: *Entity) void {
 
     const cx = @as(i32, @intFromFloat(@floor(entity.position.x))) >> 4;
     const cz = @as(i32, @intFromFloat(@floor(entity.position.z))) >> 4;
+
+    updatePlayerVisibility(player);
 
     if (state.initialized and cx == state.last_chunk_x and cz == state.last_chunk_z) return;
 
@@ -62,6 +64,98 @@ fn sendPublisherUpdate(player: *Player) void {
     player.network.sendPacket(player.connection, serialized) catch {};
 }
 
+fn updatePlayerVisibility(player: *Player) void {
+    const conduit = player.network.conduit;
+    const allocator = player.entity.allocator;
+    const snapshots = conduit.getPlayerSnapshots();
+    const range = player.view_distance * 16;
+    const range_sq: f32 = @floatFromInt(range * range);
+
+    for (snapshots) |other| {
+        if (other.entity.runtime_id == player.entity.runtime_id) continue;
+        if (!other.spawned) continue;
+
+        const dx = player.entity.position.x - other.entity.position.x;
+        const dz = player.entity.position.z - other.entity.position.z;
+        const dist_sq = dx * dx + dz * dz;
+        const in_range = dist_sq <= range_sq;
+        const currently_visible = player.visible_players.contains(other.entity.runtime_id);
+
+        if (in_range and !currently_visible) {
+            spawnPlayerFor(player, other, allocator);
+            player.visible_players.put(other.entity.runtime_id, {}) catch {};
+        } else if (!in_range and currently_visible) {
+            despawnPlayerFor(player, other, allocator);
+            _ = player.visible_players.remove(other.entity.runtime_id);
+        }
+    }
+
+    var stale = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+    defer stale.deinit(allocator);
+    var it = player.visible_players.keyIterator();
+    while (it.next()) |rid| {
+        var found = false;
+        for (snapshots) |other| {
+            if (other.entity.runtime_id == rid.*) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            stale.append(allocator, rid.*) catch {};
+        }
+    }
+    for (stale.items) |rid| {
+        _ = player.visible_players.remove(rid);
+    }
+}
+
+fn spawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator) void {
+    {
+        var stream = BinaryStream.init(allocator, null, null);
+        defer stream.deinit();
+        const packet = Protocol.AddPlayerPacket{
+            .uuid = target.uuid,
+            .username = target.username,
+            .entityRuntimeId = target.entity.runtime_id,
+            .position = target.entity.position,
+            .entityProperties = Protocol.PropertySyncData.init(allocator),
+            .abilityEntityUniqueId = target.entity.runtime_id,
+        };
+        const serialized = packet.serialize(&stream) catch return;
+        viewer.network.sendPacket(viewer.connection, serialized) catch {};
+    }
+
+    {
+        var stream = BinaryStream.init(allocator, null, null);
+        defer stream.deinit();
+        const packet = Protocol.PlayerSkinPacket{
+            .uuid = target.uuid,
+            .skin = &target.loginData.client_data,
+        };
+        const serialized = packet.serialize(&stream, allocator) catch return;
+        viewer.network.sendPacket(viewer.connection, serialized) catch {};
+    }
+
+    {
+        var stream = BinaryStream.init(allocator, null, null);
+        defer stream.deinit();
+        const flags_data = target.entity.flags.buildDataItems(allocator) catch return;
+        var packet = Protocol.SetActorDataPacket.init(allocator, target.entity.runtime_id, 0, flags_data);
+        defer packet.deinit();
+        const serialized = packet.serialize(&stream) catch return;
+        viewer.network.sendPacket(viewer.connection, serialized) catch {};
+    }
+}
+
+fn despawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocator) void {
+    var stream = BinaryStream.init(allocator, null, null);
+    defer stream.deinit();
+    const packet = Protocol.RemoveEntityPacket{ .uniqueEntityId = target.entity.unique_id };
+    const serialized = packet.serialize(&stream) catch return;
+    viewer.network.sendPacket(viewer.connection, serialized) catch {};
+}
+
 const ChunkStreamState = struct {
     conduit: *Conduit,
     runtime_id: i64,
@@ -71,9 +165,11 @@ const ChunkStreamState = struct {
     radius: i32,
     ring: i32,
     ring_idx: i32,
+    inflight: u32,
 };
 
 const BATCH_SIZE: usize = 16;
+const MAX_INFLIGHT_BATCHES: u32 = 2;
 
 pub fn queueChunkStreaming(player: *Player) !void {
     const conduit = player.network.conduit;
@@ -116,6 +212,7 @@ pub fn queueChunkStreaming(player: *Player) !void {
         .radius = radius,
         .ring = 0,
         .ring_idx = 0,
+        .inflight = 0,
     };
 
     try conduit.tasks.enqueue(.{
@@ -150,6 +247,7 @@ const ChunkBatchWork = struct {
     provider: WorldProvider,
     dim_type: Protocol.DimensionType,
     generator: ?@import("../../world/generator/terrain-generator.zig").TerrainGenerator,
+    sim_distance: i32,
 };
 
 fn workerLoadAndCompress(ctx: *anyopaque) void {
@@ -204,6 +302,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
     const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
     const allocator = work.allocator;
     defer {
+        decrementInflight(work.conduit, work.runtime_id);
         allocator.free(work.cached_packets);
         allocator.free(work.cached_hashes);
         allocator.free(work.uncached_coords);
@@ -241,11 +340,26 @@ fn onBatchComplete(ctx: *anyopaque) void {
     for (0..work.uncached_count) |i| {
         if (work.uncached_chunks[i]) |chunk| {
             if (dimension) |dim| {
-                dim.chunks.put(@import("../../world/dimension/dimension.zig").chunkHash(chunk.x, chunk.z), chunk) catch {
+                if (isInSimulationRange(work.conduit, chunk.x, chunk.z, work.sim_distance)) {
+                    const hash = @import("../../world/dimension/dimension.zig").chunkHash(chunk.x, chunk.z);
+                    const result = dim.chunks.fetchPut(hash, chunk) catch {
+                        var c = chunk;
+                        c.deinit();
+                        allocator.destroy(c);
+                        work.uncached_chunks[i] = null;
+                        continue;
+                    };
+                    if (result) |old| {
+                        dim.world.provider.uncacheChunk(chunk.x, chunk.z, dim);
+                        var old_chunk = old.value;
+                        old_chunk.deinit();
+                        allocator.destroy(old_chunk);
+                    }
+                } else {
                     var c = chunk;
                     c.deinit();
                     allocator.destroy(c);
-                };
+                }
             } else {
                 var c = chunk;
                 c.deinit();
@@ -263,6 +377,7 @@ fn onBatchComplete(ctx: *anyopaque) void {
 fn cleanupBatchWork(ctx: *anyopaque) void {
     const work: *ChunkBatchWork = @ptrCast(@alignCast(ctx));
     const allocator = work.allocator;
+    decrementInflight(work.conduit, work.runtime_id);
     for (work.cached_packets[0..work.cached_count]) |pkt| {
         if (pkt.len > 0) allocator.free(pkt);
     }
@@ -306,6 +421,29 @@ fn serializeChunkPacket(allocator: std.mem.Allocator, chunk: *Chunk, cx: i32, cz
     return allocator.dupe(u8, serialized) catch null;
 }
 
+fn decrementInflight(conduit: *Conduit, runtime_id: i64) void {
+    for (conduit.tasks.tasks.items) |*task| {
+        if (task.owner_id == runtime_id and std.mem.eql(u8, task.name, "chunk_streaming")) {
+            const state: *ChunkStreamState = @ptrCast(@alignCast(task.ctx));
+            if (state.inflight > 0) state.inflight -= 1;
+            return;
+        }
+    }
+}
+
+fn isInSimulationRange(conduit: *Conduit, cx: i32, cz: i32, sim_distance: i32) bool {
+    const snapshots = conduit.getPlayerSnapshots();
+    for (snapshots) |p| {
+        if (!p.spawned) continue;
+        const pcx = @as(i32, @intFromFloat(@floor(p.entity.position.x))) >> 4;
+        const pcz = @as(i32, @intFromFloat(@floor(p.entity.position.z))) >> 4;
+        const dx = cx - pcx;
+        const dz = cz - pcz;
+        if (dx * dx + dz * dz <= sim_distance * sim_distance) return true;
+    }
+    return false;
+}
+
 fn chunkStreamStep(ctx: *anyopaque) bool {
     const state: *ChunkStreamState = @ptrCast(@alignCast(ctx));
     const allocator = state.allocator;
@@ -314,6 +452,8 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
         allocator.destroy(state);
         return true;
     };
+
+    if (state.inflight >= MAX_INFLIGHT_BATCHES) return false;
 
     const world = state.conduit.getWorld("world") orelse {
         allocator.destroy(state);
@@ -489,7 +629,10 @@ fn submitBatch(
         .provider = world.provider,
         .dim_type = .Overworld,
         .generator = if (dimension.generator) |gen| gen.generator else null,
+        .sim_distance = dimension.simulation_distance,
     };
+
+    state.inflight += 1;
 
     state.conduit.threaded_tasks.enqueue(.{
         .work = workerLoadAndCompress,

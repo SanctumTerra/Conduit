@@ -26,6 +26,8 @@ pub const Entity = struct {
     attributes: Attributes,
     traits: std.ArrayListUnmanaged(EntityTraitInstance),
     dimension: ?*Dimension,
+    name_tag: []const u8 = "",
+    nametag_always_visible: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, entity_type: *const EntityType, dimension: ?*Dimension) Entity {
         const uid = @atomicRmw(i64, &nextUniqueId, .Add, 1, .monotonic);
@@ -102,6 +104,18 @@ pub const Entity = struct {
             }
         }
         if (Event.ReturnType(event) == bool) return true;
+    }
+
+    pub fn setNameTag(self: *Entity, tag: []const u8) void {
+        self.name_tag = tag;
+    }
+
+    pub fn getNameTag(self: *const Entity) []const u8 {
+        return self.name_tag;
+    }
+
+    pub fn setNameTagAlwaysVisible(self: *Entity, visible: bool) void {
+        self.nametag_always_visible = visible;
     }
 
     pub fn despawn(self: *Entity) void {
