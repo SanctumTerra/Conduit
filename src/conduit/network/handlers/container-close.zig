@@ -41,7 +41,7 @@ pub fn handleContainerClose(
         const response = Protocol.ContainerClosePacket{
             .identifier = packet.identifier,
             .container_type = packet.container_type,
-            .server_initiated = true,
+            .server_initiated = false,
         };
         const serialized = try response.serialize(&str);
         try network.sendPacket(connection, serialized);

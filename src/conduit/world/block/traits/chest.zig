@@ -48,6 +48,40 @@ fn onDeserialize(state: *State, tag: *const CompoundTag) void {
     }
 }
 
+fn sendActorData(block: *Block, player: *Player) void {
+    const NBT = @import("nbt");
+    const id = if (std.mem.eql(u8, block.getIdentifier(), "minecraft:trapped_chest")) "TrappedChest" else "Chest";
+    var tag = @import("nbt").CompoundTag.init(block.allocator, null);
+    defer tag.deinit(block.allocator);
+    const id_str = block.allocator.dupe(u8, id) catch return;
+    tag.set("id", .{ .String = NBT.StringTag.init(id_str, null) }) catch return;
+    tag.set("x", .{ .Int = NBT.IntTag.init(block.position.x, null) }) catch return;
+    tag.set("y", .{ .Int = NBT.IntTag.init(block.position.y, null) }) catch return;
+    tag.set("z", .{ .Int = NBT.IntTag.init(block.position.z, null) }) catch return;
+    var s = BinaryStream.init(block.allocator, null, null);
+    defer s.deinit();
+    const pkt = Protocol.BlockActorDataPacket{ .position = block.position, .nbt = tag };
+    const serialized = pkt.serialize(&s, block.allocator) catch return;
+    player.network.sendPacket(player.connection, serialized) catch {};
+
+    {
+        var s2 = BinaryStream.init(block.allocator, null, null);
+        defer s2.deinit();
+        const fix_air = Protocol.UpdateBlockPacket{ .position = block.position, .networkBlockId = 0 };
+        const air_ser = fix_air.serialize(&s2) catch return;
+        player.network.sendPacket(player.connection, air_ser) catch {};
+    }
+    {
+        const perm = block.getPermutation(0) catch return;
+        const real_id: u32 = @bitCast(perm.network_id);
+        var s3 = BinaryStream.init(block.allocator, null, null);
+        defer s3.deinit();
+        const fix_real = Protocol.UpdateBlockPacket{ .position = block.position, .networkBlockId = real_id };
+        const real_ser = fix_real.serialize(&s3) catch return;
+        player.network.sendPacket(player.connection, real_ser) catch {};
+    }
+}
+
 fn onInteract(state: *State, block: *Block, player: *Player) bool {
     if (state.pair_position != null and !state.is_parent) {
         const parent_block = block.dimension.getBlockPtr(state.pair_position.?) orelse return true;
@@ -56,6 +90,7 @@ fn onInteract(state: *State, block: *Block, player: *Player) bool {
     }
 
     const container = &(state.container orelse return true);
+    sendActorData(block, player);
     _ = container.show(player, block.position);
     sendBlockEvent(block, 1);
     sendSound(block, .ChestOpen);

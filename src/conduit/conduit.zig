@@ -49,6 +49,7 @@ pub const Conduit = struct {
     worlds: std.StringHashMap(*World),
     player_entity_type: EntityType,
     creative_content: ?CreativeContentLoader.CreativeContentData,
+    serialized_item_registry: ?[]const u8,
     tick_count: u64 = 0,
     work_time_accumulator: u64 = 0,
     tasks_time_accumulator: u64 = 0,
@@ -91,6 +92,7 @@ pub const Conduit = struct {
             .worlds = std.StringHashMap(*World).init(allocator),
             .player_entity_type = EntityType.init("minecraft:player", 1, &.{}, &.{}),
             .creative_content = null,
+            .serialized_item_registry = null,
             .network = undefined,
             .tasks = TaskQueue.init(allocator),
             .threaded_tasks = ThreadedTaskQueue.init(allocator),
@@ -119,6 +121,16 @@ pub const Conduit = struct {
         try ItemPalette.initRegistry(self.allocator);
         const item_count = try ItemPalette.loadItemTypes(self.allocator);
         Raknet.Logger.INFO("Loaded {d} item types", .{item_count});
+        {
+            const entries = try ItemPalette.getItemRegistry(self.allocator);
+            defer self.allocator.free(entries);
+            var stream = BinaryStream.init(self.allocator, null, null);
+            defer stream.deinit();
+            const pkt = Protocol.ItemRegistryPacket{ .entries = entries };
+            const raw = try pkt.serialize(&stream);
+            self.serialized_item_registry = try self.allocator.dupe(u8, raw);
+            Raknet.Logger.INFO("Pre-serialized item registry ({d} bytes)", .{self.serialized_item_registry.?.len});
+        }
 
         const entity_type_count = try EntityTypeRegistry.initRegistry(self.allocator);
         Raknet.Logger.INFO("Loaded {d} entity types", .{entity_type_count});
@@ -390,6 +402,7 @@ pub const Conduit = struct {
         ItemPalette.deinitRegistry();
         EntityTypeRegistry.EntityTypeRegistry.deinit();
         if (self.creative_content) |*cc| cc.deinit();
+        if (self.serialized_item_registry) |s| self.allocator.free(s);
         self.config.deinit();
         self.events.deinit();
         self.network.deinit();

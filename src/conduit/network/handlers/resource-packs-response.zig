@@ -170,16 +170,7 @@ pub fn handleResourcePack(
                 }
 
                 // ItemRegistryPacket
-                {
-                    var str = BinaryStream.init(network.allocator, null, null);
-                    defer str.deinit();
-
-                    const ItemPalette = @import("../../items/item-palette.zig");
-                    const entries = try ItemPalette.getItemRegistry(network.allocator);
-                    defer network.allocator.free(entries);
-
-                    const packet = Protocol.ItemRegistryPacket{ .entries = entries };
-                    const serialized = try packet.serialize(&str);
+                if (network.conduit.serialized_item_registry) |serialized| {
                     try network.sendPacket(player.connection, serialized);
                 }
 

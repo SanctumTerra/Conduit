@@ -678,6 +678,13 @@ fn freeBlockDataSlice(allocator: std.mem.Allocator, block_data: []ChunkBlockData
     allocator.free(block_data);
 }
 
+fn blockEntityTypeId(block_identifier: []const u8) []const u8 {
+    if (std.mem.eql(u8, block_identifier, "minecraft:barrel")) return "Barrel";
+    if (std.mem.eql(u8, block_identifier, "minecraft:chest")) return "Chest";
+    if (std.mem.eql(u8, block_identifier, "minecraft:trapped_chest")) return "TrappedChest";
+    return block_identifier;
+}
+
 fn sendBlockActorData(allocator: std.mem.Allocator, player: *Player, dim: *Dimension, batch_coords: []const ChunkCoord) void {
     for (batch_coords) |coord| {
         const chunk_blocks = dim.getBlocksInChunk(coord.x, coord.z);
@@ -696,7 +703,7 @@ fn sendBlockActorData(allocator: std.mem.Allocator, player: *Player, dim: *Dimen
             var tag = NBT.CompoundTag.init(allocator, null);
             defer tag.deinit(allocator);
 
-            const id_str = allocator.dupe(u8, block.getIdentifier()) catch continue;
+            const id_str = allocator.dupe(u8, blockEntityTypeId(block.getIdentifier())) catch continue;
             tag.set("id", .{ .String = NBT.StringTag.init(id_str, null) }) catch continue;
             tag.set("x", .{ .Int = NBT.IntTag.init(block.position.x, null) }) catch continue;
             tag.set("y", .{ .Int = NBT.IntTag.init(block.position.y, null) }) catch continue;
@@ -712,6 +719,22 @@ fn sendBlockActorData(allocator: std.mem.Allocator, player: *Player, dim: *Dimen
             };
             const serialized = pkt.serialize(&s, allocator) catch continue;
             player.network.sendPacket(player.connection, serialized) catch {};
+            {
+                var s2 = BinaryStream.init(allocator, null, null);
+                defer s2.deinit();
+                const fix_air = Protocol.UpdateBlockPacket{ .position = block.position, .networkBlockId = 0 };
+                const air_ser = fix_air.serialize(&s2) catch continue;
+                player.network.sendPacket(player.connection, air_ser) catch {};
+            }
+            {
+                const perm = block.getPermutation(0) catch continue;
+                const real_id: u32 = @bitCast(perm.network_id);
+                var s3 = BinaryStream.init(allocator, null, null);
+                defer s3.deinit();
+                const fix_real = Protocol.UpdateBlockPacket{ .position = block.position, .networkBlockId = real_id };
+                const real_ser = fix_real.serialize(&s3) catch continue;
+                player.network.sendPacket(player.connection, real_ser) catch {};
+            }
         }
     }
 }
@@ -941,7 +964,6 @@ pub const ChunkLoadingTrait = EntityTrait(State, .{
     .onTick = onTick,
 });
 
-// Feature: chunk-performance-optimization, Property 8: Two-tier chunk classification
 test "two-tier chunk classification matches squared distance formula" {
     var rng = std.Random.DefaultPrng.init(0xabcd1234);
     const random = rng.random();
@@ -966,7 +988,6 @@ test "two-tier chunk classification matches squared distance formula" {
     }
 }
 
-// Feature: chunk-performance-optimization, Property 9: Render-only chunks produce no block data side effects
 test "render-only chunks produce empty block data" {
     var rng = std.Random.DefaultPrng.init(0xbeef5678);
     const random = rng.random();
