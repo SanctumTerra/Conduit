@@ -13,7 +13,7 @@
             .hash = "BinaryStream-0.0.0-gn8mmnJZAQAnFC-kkrSOzigRqEgMsHddZlmmGELc0jAv",
         },
         .ZigNet = .{
-            .path = "libs/ZigNet",
+            .path = "git+https://github.com/SanctumTerra/ZigNet#3fa953f21bd09f1c8193982a3cab3076c4201aee",
         },
     },
     .paths = .{
