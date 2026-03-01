@@ -24,12 +24,12 @@ pub fn handleBlockPickRequest(
     const inv = &inv_state.container.base;
 
     const world = network.conduit.getWorld("world") orelse {
-        Raknet.Logger.ERROR("Failed to get world");
+        Raknet.Logger.ERROR("Failed to get world", .{});
         return;
     };
 
     const dimension = world.getDimension("overworld") orelse {
-        Raknet.Logger.ERROR("Failed to get dimension");
+        Raknet.Logger.ERROR("Failed to get dimension", .{});
         return;
     };
 
