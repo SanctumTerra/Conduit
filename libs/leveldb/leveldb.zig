@@ -31,6 +31,16 @@ const c = struct {
     extern fn leveldb_writebatch_delete(batch: *leveldb_writebatch_t, key: [*]const u8, klen: usize) void;
     extern fn leveldb_writebatch_clear(batch: *leveldb_writebatch_t) void;
     extern fn leveldb_free(ptr: ?*anyopaque) void;
+    extern fn leveldb_readoptions_set_verify_checksums(opts: *leveldb_readoptions_t, val: u8) void;
+    extern fn leveldb_readoptions_set_fill_cache(opts: *leveldb_readoptions_t, val: u8) void;
+    extern fn leveldb_filterpolicy_create_bloom(bits_per_key: c_int) ?*leveldb_filterpolicy_t;
+    extern fn leveldb_filterpolicy_destroy(policy: *leveldb_filterpolicy_t) void;
+    extern fn leveldb_cache_create_lru(capacity: usize) ?*leveldb_cache_t;
+    extern fn leveldb_cache_destroy(cache: *leveldb_cache_t) void;
+    extern fn leveldb_options_set_filter_policy(opts: *leveldb_options_t, policy: *leveldb_filterpolicy_t) void;
+    extern fn leveldb_options_set_cache(opts: *leveldb_options_t, cache: *leveldb_cache_t) void;
+    extern fn leveldb_options_set_write_buffer_size(opts: *leveldb_options_t, size: usize) void;
+    extern fn leveldb_options_set_block_size(opts: *leveldb_options_t, size: usize) void;
 
     const leveldb_t = opaque {};
     const leveldb_options_t = opaque {};
@@ -38,33 +48,60 @@ const c = struct {
     const leveldb_writeoptions_t = opaque {};
     const leveldb_iterator_t = opaque {};
     const leveldb_writebatch_t = opaque {};
+    const leveldb_filterpolicy_t = opaque {};
+    const leveldb_cache_t = opaque {};
 };
 
 pub const DB = struct {
     handle: *c.leveldb_t,
     read_opts: *c.leveldb_readoptions_t,
     write_opts: *c.leveldb_writeoptions_t,
+    bloom: *c.leveldb_filterpolicy_t,
+    cache: *c.leveldb_cache_t,
 
     pub fn open(path: [*:0]const u8, create_if_missing: bool) !DB {
         const opts = c.leveldb_options_create() orelse return error.Failed;
         defer c.leveldb_options_destroy(opts);
         c.leveldb_options_set_create_if_missing(opts, @intFromBool(create_if_missing));
 
+        const bloom = c.leveldb_filterpolicy_create_bloom(10) orelse return error.Failed;
+        c.leveldb_options_set_filter_policy(opts, bloom);
+
+        const lru_cache = c.leveldb_cache_create_lru(64 * 1024 * 1024) orelse {
+            c.leveldb_filterpolicy_destroy(bloom);
+            return error.Failed;
+        };
+        c.leveldb_options_set_cache(opts, lru_cache);
+        c.leveldb_options_set_write_buffer_size(opts, 8 * 1024 * 1024);
+        c.leveldb_options_set_block_size(opts, 8 * 1024);
+
         var err: ?[*:0]u8 = null;
         const handle = c.leveldb_open(opts, path, &err);
         if (err) |e| {
             c.leveldb_free(e);
+            c.leveldb_cache_destroy(lru_cache);
+            c.leveldb_filterpolicy_destroy(bloom);
             return error.Failed;
         }
         const ro = c.leveldb_readoptions_create() orelse return error.Failed;
+        c.leveldb_readoptions_set_verify_checksums(ro, 0);
+        c.leveldb_readoptions_set_fill_cache(ro, 1);
         const wo = c.leveldb_writeoptions_create() orelse return error.Failed;
-        return .{ .handle = handle orelse return error.Failed, .read_opts = ro, .write_opts = wo };
+        return .{
+            .handle = handle orelse return error.Failed,
+            .read_opts = ro,
+            .write_opts = wo,
+            .bloom = bloom,
+            .cache = lru_cache,
+        };
     }
 
     pub fn close(self: *DB) void {
         c.leveldb_readoptions_destroy(self.read_opts);
         c.leveldb_writeoptions_destroy(self.write_opts);
         c.leveldb_close(self.handle);
+        c.leveldb_cache_destroy(self.cache);
+        c.leveldb_filterpolicy_destroy(self.bloom);
     }
 
     pub fn put(self: *DB, key: []const u8, value: []const u8) !void {
@@ -93,7 +130,10 @@ pub const DB = struct {
     }
 
     pub fn createReadOptions() ?*c.leveldb_readoptions_t {
-        return c.leveldb_readoptions_create();
+        const opts = c.leveldb_readoptions_create() orelse return null;
+        c.leveldb_readoptions_set_verify_checksums(opts, 0);
+        c.leveldb_readoptions_set_fill_cache(opts, 1);
+        return opts;
     }
 
     pub fn destroyReadOptions(opts: *c.leveldb_readoptions_t) void {

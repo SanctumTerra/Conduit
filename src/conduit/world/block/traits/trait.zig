@@ -107,10 +107,12 @@ pub fn BlockTrait(comptime State: type, comptime config: BlockTraitConfig(State)
             if (blocks.len > 0) {
                 try registerTraitForBlocks(blocks, &defaultFactory);
             }
+            try registerTraitById(identifier, &defaultFactory);
         }
 
         pub fn registerForState(state_key: []const u8) !void {
             try registerDynamicTrait(state_key, &defaultFactory);
+            try registerTraitById(identifier, &defaultFactory);
         }
 
         pub fn destroy(instance: BlockTraitInstance, allocator: std.mem.Allocator) void {
@@ -205,6 +207,7 @@ pub const DynamicTraitEntry = struct {
 const FactoryList = std.ArrayListUnmanaged(TraitFactory);
 
 var trait_registry: std.StringHashMapUnmanaged(FactoryList) = .{};
+var trait_id_registry: std.StringHashMapUnmanaged(TraitFactory) = .{};
 var dynamic_traits: std.ArrayListUnmanaged(DynamicTraitEntry) = .{};
 var registry_allocator: std.mem.Allocator = undefined;
 var registry_initialized: bool = false;
@@ -212,6 +215,7 @@ var registry_initialized: bool = false;
 pub fn initTraitRegistry(allocator: std.mem.Allocator) void {
     registry_allocator = allocator;
     trait_registry = .{};
+    trait_id_registry = .{};
     dynamic_traits = .{};
     registry_initialized = true;
 }
@@ -223,6 +227,7 @@ pub fn deinitTraitRegistry() void {
         list.deinit(registry_allocator);
     }
     trait_registry.deinit(registry_allocator);
+    trait_id_registry.deinit(registry_allocator);
     dynamic_traits.deinit(registry_allocator);
     registry_initialized = false;
 }
@@ -239,6 +244,15 @@ pub fn registerTraitForBlocks(comptime blocks: []const []const u8, factory: Trai
 
 pub fn registerDynamicTrait(state_key: []const u8, factory: TraitFactory) !void {
     try dynamic_traits.append(registry_allocator, .{ .state_key = state_key, .factory = factory });
+}
+
+pub fn registerTraitById(trait_id: []const u8, factory: TraitFactory) !void {
+    try trait_id_registry.put(registry_allocator, trait_id, factory);
+}
+
+pub fn getTraitFactory(trait_id: []const u8) ?TraitFactory {
+    if (!registry_initialized) return null;
+    return trait_id_registry.get(trait_id);
 }
 
 const Dimension = @import("../../../world/dimension/dimension.zig").Dimension;
@@ -274,4 +288,46 @@ pub fn applyTraitsForBlock(allocator: std.mem.Allocator, dimension: *Dimension, 
     }
 
     try dimension.storeBlock(block);
+}
+
+pub fn applyTraitsFromRegistry(allocator: std.mem.Allocator, block: *Block) !void {
+    if (!registry_initialized) return;
+    const identifier = block.getIdentifier();
+    const perm = block.getPermutation(0) catch null;
+
+    if (trait_registry.get(identifier)) |factories| {
+        for (factories.items) |factory| {
+            const instance = try factory(allocator);
+            try block.addTrait(instance);
+        }
+    }
+
+    if (perm) |p| {
+        for (dynamic_traits.items) |entry| {
+            if (p.state.contains(entry.state_key)) {
+                const instance = try entry.factory(allocator);
+                try block.addTrait(instance);
+            }
+        }
+    }
+}
+
+pub fn hasRegisteredTraits(identifier: []const u8) bool {
+    if (!registry_initialized) return false;
+    return trait_registry.contains(identifier);
+}
+
+pub fn hasRegisteredDynamicTraits() bool {
+    if (!registry_initialized) return false;
+    return dynamic_traits.items.len > 0;
+}
+
+pub fn getDynamicTraits() []const DynamicTraitEntry {
+    if (!registry_initialized) return &.{};
+    return dynamic_traits.items;
+}
+
+pub fn hasAnyStaticTraits() bool {
+    if (!registry_initialized) return false;
+    return trait_registry.count() > 0;
 }

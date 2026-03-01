@@ -26,6 +26,8 @@ pub const BlockPermutation = struct {
 
     var permutations: std.AutoHashMap(i32, *BlockPermutation) = undefined;
     var permutations_initialized = false;
+    var nbt_hash_to_network_id: std.AutoHashMap(i32, i32) = undefined;
+    var nbt_hash_lookup_initialized = false;
 
     const HASH_OFFSET: i32 = @bitCast(@as(u32, 0x811c9dc5));
 
@@ -37,6 +39,10 @@ pub const BlockPermutation = struct {
     }
 
     pub fn deinitRegistry() void {
+        if (nbt_hash_lookup_initialized) {
+            nbt_hash_to_network_id.deinit();
+            nbt_hash_lookup_initialized = false;
+        }
         if (permutations_initialized) {
             var iter = permutations.valueIterator();
             while (iter.next()) |perm| {
@@ -98,6 +104,24 @@ pub const BlockPermutation = struct {
         try permutations.put(self.network_id, self);
     }
 
+    pub fn initNbtHashLookup(allocator: std.mem.Allocator) !void {
+        if (nbt_hash_lookup_initialized) return;
+        nbt_hash_to_network_id = std.AutoHashMap(i32, i32).init(allocator);
+        nbt_hash_lookup_initialized = true;
+
+        var iter = permutations.iterator();
+        while (iter.next()) |entry| {
+            const perm = entry.value_ptr.*;
+            const hash = try calculateHash(allocator, perm.identifier, perm.state);
+            try nbt_hash_to_network_id.put(hash, perm.network_id);
+        }
+    }
+
+    pub fn lookupByNbtHash(hash: i32) ?i32 {
+        if (!nbt_hash_lookup_initialized) return null;
+        return nbt_hash_to_network_id.get(hash);
+    }
+
     pub fn getByNetworkId(network_id: i32) ?*BlockPermutation {
         return permutations.get(network_id);
     }
@@ -138,18 +162,45 @@ pub const BlockPermutation = struct {
         return root;
     }
 
-    pub fn calculateHash(allocator: std.mem.Allocator, identifier: []const u8, state: BlockState) !i32 {
-        _ = allocator;
-        var hash: i32 = HASH_OFFSET;
+    pub fn calculateHash(_: std.mem.Allocator, identifier: []const u8, state: BlockState) !i32 {
+        const FNV_OFFSET: u32 = 0x811c9dc5;
+        const FNV_PRIME: u32 = 16777619;
 
-        for (identifier) |byte| {
-            hash ^= @as(i32, byte);
-            hash = @bitCast(@as(u32, @bitCast(hash)) *% 16777619);
-        }
+        var buf: [8192]u8 = undefined;
+        var pos: usize = 0;
+
+        buf[pos] = 10;
+        pos += 1;
+        buf[pos] = 0;
+        pos += 1;
+        buf[pos] = 0;
+        pos += 1;
+
+        buf[pos] = 8;
+        pos += 1;
+        const name_key = "name";
+        const name_len: u16 = @intCast(name_key.len);
+        @memcpy(buf[pos .. pos + 2], &@as([2]u8, @bitCast(std.mem.nativeToLittle(u16, name_len))));
+        pos += 2;
+        @memcpy(buf[pos .. pos + name_key.len], name_key);
+        pos += name_key.len;
+        const id_len: u16 = @intCast(identifier.len);
+        @memcpy(buf[pos .. pos + 2], &@as([2]u8, @bitCast(std.mem.nativeToLittle(u16, id_len))));
+        pos += 2;
+        @memcpy(buf[pos .. pos + identifier.len], identifier);
+        pos += identifier.len;
+
+        buf[pos] = 10;
+        pos += 1;
+        const states_key = "states";
+        const states_len: u16 = @intCast(states_key.len);
+        @memcpy(buf[pos .. pos + 2], &@as([2]u8, @bitCast(std.mem.nativeToLittle(u16, states_len))));
+        pos += 2;
+        @memcpy(buf[pos .. pos + states_key.len], states_key);
+        pos += states_key.len;
 
         var keys_buf: [64][]const u8 = undefined;
         var keys_count: usize = 0;
-
         var iter = state.iterator();
         while (iter.next()) |entry| {
             if (keys_count < keys_buf.len) {
@@ -157,7 +208,6 @@ pub const BlockPermutation = struct {
                 keys_count += 1;
             }
         }
-
         const keys = keys_buf[0..keys_count];
         std.mem.sort([]const u8, keys, {}, struct {
             fn lessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -166,33 +216,119 @@ pub const BlockPermutation = struct {
         }.lessThan);
 
         for (keys) |key| {
-            for (key) |byte| {
-                hash ^= @as(i32, byte);
-                hash = @bitCast(@as(u32, @bitCast(hash)) *% 16777619);
-            }
-
             const value = state.get(key).?;
+            const klen: u16 = @intCast(key.len);
             switch (value) {
                 .boolean => |b| {
-                    hash ^= if (b) @as(i32, 1) else @as(i32, 0);
-                    hash = @bitCast(@as(u32, @bitCast(hash)) *% 16777619);
+                    buf[pos] = 1;
+                    pos += 1;
+                    @memcpy(buf[pos .. pos + 2], &@as([2]u8, @bitCast(std.mem.nativeToLittle(u16, klen))));
+                    pos += 2;
+                    @memcpy(buf[pos .. pos + key.len], key);
+                    pos += key.len;
+                    buf[pos] = if (b) 1 else 0;
+                    pos += 1;
                 },
                 .integer => |i| {
-                    const bytes = std.mem.asBytes(&i);
-                    for (bytes) |byte| {
-                        hash ^= @as(i32, byte);
-                        hash = @bitCast(@as(u32, @bitCast(hash)) *% 16777619);
-                    }
+                    buf[pos] = 3;
+                    pos += 1;
+                    @memcpy(buf[pos .. pos + 2], &@as([2]u8, @bitCast(std.mem.nativeToLittle(u16, klen))));
+                    pos += 2;
+                    @memcpy(buf[pos .. pos + key.len], key);
+                    pos += key.len;
+                    @memcpy(buf[pos .. pos + 4], &@as([4]u8, @bitCast(std.mem.nativeToLittle(i32, i))));
+                    pos += 4;
                 },
                 .string => |s| {
-                    for (s) |byte| {
-                        hash ^= @as(i32, byte);
-                        hash = @bitCast(@as(u32, @bitCast(hash)) *% 16777619);
-                    }
+                    buf[pos] = 8;
+                    pos += 1;
+                    @memcpy(buf[pos .. pos + 2], &@as([2]u8, @bitCast(std.mem.nativeToLittle(u16, klen))));
+                    pos += 2;
+                    @memcpy(buf[pos .. pos + key.len], key);
+                    pos += key.len;
+                    const slen: u16 = @intCast(s.len);
+                    @memcpy(buf[pos .. pos + 2], &@as([2]u8, @bitCast(std.mem.nativeToLittle(u16, slen))));
+                    pos += 2;
+                    @memcpy(buf[pos .. pos + s.len], s);
+                    pos += s.len;
                 },
             }
         }
 
-        return hash;
+        buf[pos] = 0;
+        pos += 1;
+        buf[pos] = 0;
+        pos += 1;
+
+        var hash: u32 = FNV_OFFSET;
+        for (buf[0..pos]) |byte| {
+            hash ^= byte;
+            hash *%= FNV_PRIME;
+        }
+        return @bitCast(hash);
     }
 };
+
+test "hash lookup returns correct network_id for all permutations" {
+    const allocator = std.testing.allocator;
+    try BlockPermutation.initRegistry(allocator);
+    defer BlockPermutation.deinitRegistry();
+
+    try BlockType.initRegistry(allocator);
+    defer BlockType.deinitRegistry();
+
+    const Data = @import("protocol").Data;
+    var loader = Data.BlockPermutationLoader.init(allocator);
+    defer loader.deinit();
+    _ = try loader.load();
+
+    var types_created = std.StringHashMap(void).init(allocator);
+    defer types_created.deinit();
+
+    for (loader.getPermutations()) |perm_data| {
+        const identifier = perm_data.identifier;
+        if (!types_created.contains(identifier)) {
+            if (BlockType.get(identifier) == null) {
+                const block_type = try BlockType.init(allocator, identifier);
+                try block_type.register();
+            }
+            try types_created.put(identifier, {});
+        }
+
+        var state = BlockState.init(allocator);
+        if (perm_data.state == .object) {
+            var iter = perm_data.state.object.iterator();
+            while (iter.next()) |entry| {
+                const key = try allocator.dupe(u8, entry.key_ptr.*);
+                const value = switch (entry.value_ptr.*) {
+                    .bool => |b| BlockStateValue{ .boolean = b },
+                    .integer => |i| BlockStateValue{ .integer = @intCast(i) },
+                    .string => |s| BlockStateValue{ .string = try allocator.dupe(u8, s) },
+                    else => continue,
+                };
+                try state.put(key, value);
+            }
+        }
+
+        const perm = try BlockPermutation.init(allocator, perm_data.hash, identifier, state);
+        try perm.register();
+
+        if (BlockType.get(identifier)) |block_type| {
+            try block_type.addPermutation(perm);
+        }
+    }
+
+    try BlockPermutation.initNbtHashLookup(allocator);
+
+    var iter = BlockPermutation.permutations.iterator();
+    var checked: usize = 0;
+    while (iter.next()) |entry| {
+        const perm = entry.value_ptr.*;
+        const hash = try BlockPermutation.calculateHash(allocator, perm.identifier, perm.state);
+        const looked_up = BlockPermutation.lookupByNbtHash(hash);
+        try std.testing.expect(looked_up != null);
+        try std.testing.expectEqual(perm.network_id, looked_up.?);
+        checked += 1;
+    }
+    try std.testing.expect(checked > 0);
+}

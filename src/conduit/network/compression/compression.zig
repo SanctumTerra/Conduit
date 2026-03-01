@@ -6,6 +6,27 @@ const c = @cImport({
     @cInclude("zlib.h");
 });
 
+threadlocal var tl_stream: ?*c.z_stream = null;
+
+fn acquireThreadLocal() !*c.z_stream {
+    if (tl_stream) |s| {
+        if (c.deflateReset(s) == c.Z_OK) return s;
+        _ = c.deflateEnd(s);
+        std.heap.c_allocator.destroy(s);
+        tl_stream = null;
+    }
+    const s = try std.heap.c_allocator.create(c.z_stream);
+    s.zalloc = null;
+    s.zfree = null;
+    s.@"opaque" = null;
+    if (c.deflateInit2(s, c.Z_BEST_SPEED, c.Z_DEFLATED, -15, 8, c.Z_DEFAULT_STRATEGY) != c.Z_OK) {
+        std.heap.c_allocator.destroy(s);
+        return error.ZlibInitFailed;
+    }
+    tl_stream = s;
+    return s;
+}
+
 pub const DecompressResult = struct {
     packets: [][]const u8,
     buffer: []const u8,
@@ -51,22 +72,14 @@ pub const Compression = struct {
                 write_pos += packet.len;
             }
 
-            var stream: c.z_stream = undefined;
-            stream.zalloc = null;
-            stream.zfree = null;
-            stream.@"opaque" = null;
-
-            if (c.deflateInit2(&stream, c.Z_DEFAULT_COMPRESSION, c.Z_DEFLATED, -15, 8, c.Z_DEFAULT_STRATEGY) != c.Z_OK) {
-                return error.ZlibInitFailed;
-            }
-            defer _ = c.deflateEnd(&stream);
+            var stream = try acquireThreadLocal();
 
             stream.next_in = @constCast(framed_buffer.ptr);
             stream.avail_in = @as(c_uint, @intCast(framed_size));
             stream.next_out = buffer.ptr + 2;
             stream.avail_out = @as(c_uint, @intCast(max_compressed));
 
-            const ret = c.deflate(&stream, c.Z_FINISH);
+            const ret = c.deflate(stream, c.Z_FINISH);
             if (ret != c.Z_STREAM_END) {
                 return error.ZlibDeflateFailed;
             }
@@ -231,3 +244,67 @@ pub const Compression = struct {
         return .{ .value = result, .size = pos + 1 };
     }
 };
+
+test "compression round-trip with pooled streams" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0xdeadbeef);
+    const random = rng.random();
+
+    const options = CompressionOptions{
+        .compressionMethod = .Zlib,
+        .compressionThreshold = 1,
+    };
+
+    for (0..100) |_| {
+        const len = random.intRangeAtMost(usize, 16, 512);
+        const data = try allocator.alloc(u8, len);
+        defer allocator.free(data);
+        random.bytes(data);
+
+        const pkts = [_][]const u8{data};
+        const compressed = try Compression.compress(&pkts, options, allocator);
+        defer allocator.free(compressed);
+
+        const result = try Compression.decompress(compressed, options, allocator);
+        defer result.deinit();
+
+        try std.testing.expectEqual(@as(usize, 1), result.packets.len);
+        try std.testing.expectEqualSlices(u8, data, result.packets[0]);
+    }
+}
+
+test "batch compression round-trip preserves order and content" {
+    const allocator = std.testing.allocator;
+    var rng = std.Random.DefaultPrng.init(0xcafe9876);
+    const random = rng.random();
+
+    const options = CompressionOptions{
+        .compressionMethod = .Zlib,
+        .compressionThreshold = 1,
+    };
+
+    for (0..100) |_| {
+        const pkt_count = random.intRangeAtMost(usize, 1, 8);
+        var pkts: [8][]u8 = undefined;
+        var pkt_slices: [8][]const u8 = undefined;
+
+        for (0..pkt_count) |i| {
+            const len = random.intRangeAtMost(usize, 16, 256);
+            pkts[i] = try allocator.alloc(u8, len);
+            random.bytes(pkts[i]);
+            pkt_slices[i] = pkts[i];
+        }
+        defer for (0..pkt_count) |i| allocator.free(pkts[i]);
+
+        const compressed = try Compression.compress(pkt_slices[0..pkt_count], options, allocator);
+        defer allocator.free(compressed);
+
+        const result = try Compression.decompress(compressed, options, allocator);
+        defer result.deinit();
+
+        try std.testing.expectEqual(pkt_count, result.packets.len);
+        for (0..pkt_count) |i| {
+            try std.testing.expectEqualSlices(u8, pkts[i], result.packets[i]);
+        }
+    }
+}

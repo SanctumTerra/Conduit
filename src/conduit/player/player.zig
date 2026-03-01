@@ -192,9 +192,6 @@ pub const Player = struct {
     }
 
     pub fn onSpawn(self: *Player) !void {
-        self.sendSpawnChunks() catch |err| {
-            Raknet.Logger.ERROR("Failed to send spawn chunks for {s}: {any}", .{ self.username, err });
-        };
         Raknet.Logger.INFO("Player {s} has spawned.", .{self.username});
 
         if (self.entity.getTraitState(InventoryTrait)) |state| {

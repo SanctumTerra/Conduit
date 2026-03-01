@@ -87,12 +87,6 @@ fn handleItemUseTransaction(
     const world = network.conduit.getWorld("world") orelse return;
     const dimension = world.getDimension("overworld") orelse return;
 
-    if (!player.entity.flags.getFlag(.Sneaking)) {
-        if (dimension.getBlockPtr(transaction.blockPosition)) |clicked_block| {
-            if (!clicked_block.fireEvent(.Interact, .{ clicked_block, player })) return;
-        }
-    }
-
     const inv_state = player.entity.getTraitState(InventoryTrait.InventoryTrait) orelse return;
     const held = InventoryTrait.getHeldItem(inv_state) orelse return;
 

@@ -109,6 +109,7 @@ pub const CreativeContentPacket = @import("./packets/creative-content.zig").Crea
 pub const ItemRegistryPacket = @import("./packets/item-registry.zig").ItemRegistryPacket;
 pub const ItemRegistryEntry = @import("./packets/item-registry.zig").ItemRegistryEntry;
 pub const ContainerOpenPacket = @import("./packets/container-open.zig").ContainerOpenPacket;
+pub const BlockActorDataPacket = @import("./packets/block-actor-data.zig").BlockActorDataPacket;
 pub const ContainerClosePacket = @import("./packets/container-close.zig").ContainerClosePacket;
 pub const InventoryContentPacket = @import("./packets/inventory-content.zig").InventoryContentPacket;
 pub const InteractPacket = @import("./packets/interact.zig").InteractPacket;

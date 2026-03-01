@@ -14,6 +14,7 @@ const Entity = @import("./entity/entity.zig").Entity;
 const CommandRegistry = @import("./command/registry.zig").CommandRegistry;
 
 const loadBlockPermutations = @import("./world/block/root.zig").loadBlockPermutations;
+const BlockPermutation = @import("./world/block/block-permutation.zig").BlockPermutation;
 const initRegistries = @import("./world/block/root.zig").initRegistries;
 const deinitRegistries = @import("./world/block/root.zig").deinitRegistries;
 const ChestTrait = @import("./world/block/traits/chest.zig").ChestTrait;
@@ -31,6 +32,7 @@ const ItemPalette = @import("./items/item-palette.zig");
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
 const ThreadedTaskQueue = @import("./tasks/threaded-tasks.zig").ThreadedTaskQueue;
+const TickProfiler = @import("./tick-profiler.zig").TickProfiler;
 const BanManager = @import("./network/ban-manager.zig").BanManager;
 const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
 
@@ -53,6 +55,7 @@ pub const Conduit = struct {
     current_tps: f64 = 20.0,
     tasks: TaskQueue,
     threaded_tasks: ThreadedTaskQueue,
+    profiler: TickProfiler,
     command_registry: CommandRegistry,
     ban_manager: BanManager,
     permission_manager: PermissionManager,
@@ -91,6 +94,7 @@ pub const Conduit = struct {
             .network = undefined,
             .tasks = TaskQueue.init(allocator),
             .threaded_tasks = ThreadedTaskQueue.init(allocator),
+            .profiler = .{},
             .command_registry = CommandRegistry.init(allocator),
             .ban_manager = BanManager.init(allocator, "banned-players.json"),
             .permission_manager = PermissionManager.init(allocator, "permissions.json", config.default_group),
@@ -106,6 +110,7 @@ pub const Conduit = struct {
         try OpenBitTrait.registerForState("open_bit");
         const count = try loadBlockPermutations(self.allocator);
         Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
+        try BlockPermutation.initNbtHashLookup(self.allocator);
 
         EntityTraits.initEntityTraitRegistry(self.allocator);
         try GravityTrait.register();
@@ -242,15 +247,20 @@ pub const Conduit = struct {
         const self = @as(*Conduit, @ptrCast(@alignCast(context)));
         const work_start = std.time.nanoTimestamp();
         const tick_budget_ns: u64 = std.time.ns_per_s / @as(u64, self.config.max_tps);
+        self.profiler.tick_budget_ns = tick_budget_ns;
 
         self.tick_count += 1;
 
+        var phase_start = std.time.nanoTimestamp();
         const snapshots = self.getPlayerSnapshots();
         for (snapshots) |player| {
             if (!player.spawned) continue;
             player.entity.fireEvent(.Tick, .{&player.entity});
         }
+        var phase_end = std.time.nanoTimestamp();
+        self.profiler.record(.player_tick, @intCast(@max(0, phase_end - phase_start)));
 
+        phase_start = std.time.nanoTimestamp();
         var worlds_it = self.worlds.valueIterator();
         while (worlds_it.next()) |world| {
             var dims_it = world.*.dimensions.valueIterator();
@@ -262,16 +272,31 @@ pub const Conduit = struct {
                 dim.*.flushPendingRemovals();
             }
         }
+        phase_end = std.time.nanoTimestamp();
+        self.profiler.record(.world_tick, @intCast(@max(0, phase_end - phase_start)));
 
-        const tasks_start = std.time.nanoTimestamp();
-        _ = self.tasks.runUntil(work_start, tick_budget_ns * 40 / 100);
-        const tasks_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - tasks_start));
+        const drain_budget = tick_budget_ns * 15 / 100;
+
+        phase_start = std.time.nanoTimestamp();
+        self.threaded_tasks.drainCompleted(drain_budget);
+        phase_end = std.time.nanoTimestamp();
+        self.profiler.record(.drain_completed_1, @intCast(@max(0, phase_end - phase_start)));
+
+        phase_start = std.time.nanoTimestamp();
+        _ = self.tasks.runUntil(work_start, tick_budget_ns * 50 / 100);
+        phase_end = std.time.nanoTimestamp();
+        const tasks_ns: u64 = @intCast(@max(0, phase_end - phase_start));
         self.tasks_time_accumulator += tasks_ns;
+        self.profiler.record(.main_tasks, tasks_ns);
 
-        self.threaded_tasks.drainCompleted();
+        phase_start = std.time.nanoTimestamp();
+        self.threaded_tasks.drainCompleted(drain_budget);
+        phase_end = std.time.nanoTimestamp();
+        self.profiler.record(.drain_completed_2, @intCast(@max(0, phase_end - phase_start)));
 
         const work_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - work_start));
         self.work_time_accumulator += work_ns;
+        self.profiler.recordTick(work_ns);
 
         if (self.tick_count % 20 == 0) {
             const avg_work_ns = self.work_time_accumulator / 20;
@@ -327,6 +352,8 @@ pub const Conduit = struct {
     }
 
     pub fn deinit(self: *Conduit) void {
+        self.profiler.writeReport("dump/tick-profile.txt");
+
         self.raknet.running = false;
         self.raknet.socket.stop();
         if (self.raknet.tick_thread) |thread| {
@@ -334,8 +361,11 @@ pub const Conduit = struct {
             self.raknet.tick_thread = null;
         }
 
-        self.threaded_tasks.deinit();
+        self.threaded_tasks.clearPending();
+        self.threaded_tasks.stop();
+        self.threaded_tasks.drainCompleted(std.math.maxInt(u64));
         self.saveAllWorlds();
+        self.threaded_tasks.deinit();
 
         var it = self.players.valueIterator();
         while (it.next()) |player| {

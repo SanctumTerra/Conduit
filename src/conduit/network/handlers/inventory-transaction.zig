@@ -7,6 +7,7 @@ const Player = @import("../../player/player.zig").Player;
 const InventoryTrait = @import("../../entity/traits/inventory.zig");
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
 const applyTraitsForBlock = @import("../../world/block/traits/trait.zig").applyTraitsForBlock;
+const applyTraitsFromRegistry = @import("../../world/block/traits/trait.zig").applyTraitsFromRegistry;
 const resolveWithPlacement = @import("../../world/block/traits/rotation.zig").resolveWithPlacement;
 const placeUpperBlock = @import("../../world/block/traits/rotation.zig").placeUpperBlock;
 const Events = @import("../../events/types.zig");
@@ -60,7 +61,20 @@ fn handleUseItem(
 
     if (!player.entity.flags.getFlag(.Sneaking)) {
         if (dimension.getBlockPtr(data.blockPosition)) |clicked_block| {
-            if (!clicked_block.fireEvent(.Interact, .{ clicked_block, player })) return;
+            if (!clicked_block.fireEvent(.Interact, .{ clicked_block, player })) {
+                return;
+            }
+        } else {
+            var temp_block = dimension.getBlock(data.blockPosition);
+            applyTraitsFromRegistry(player.entity.allocator, &temp_block) catch {};
+            if (temp_block.traits.items.len > 0) {
+                const result = temp_block.fireEvent(.Interact, .{ &temp_block, player });
+                for (temp_block.traits.items) |instance| {
+                    if (instance.vtable.destroyFn) |f| f(instance.ctx, player.entity.allocator);
+                }
+                temp_block.traits.deinit(player.entity.allocator);
+                if (!result) return;
+            }
         }
     }
 

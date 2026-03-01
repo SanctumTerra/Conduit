@@ -41,7 +41,9 @@ fn onDeserialize(state: *State, tag: *const CompoundTag) void {
     const container = &(state.container orelse return);
     const items_tag = tag.get("Items") orelse return;
     switch (items_tag) {
-        .List => |list| serialization.deserializeContainer(container.base.allocator, &container.base, &list),
+        .List => |list| {
+            serialization.deserializeContainer(container.base.allocator, &container.base, &list);
+        },
         else => {},
     }
 }

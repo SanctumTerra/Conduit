@@ -47,8 +47,6 @@ pub const TaskQueue = struct {
 
     pub fn runUntil(self: *TaskQueue, tick_start: i128, budget_ns: u64) bool {
         var did_work = false;
-        if (self.tasks.items.len == 0) return false;
-
         var idx: usize = 0;
         while (self.tasks.items.len > 0) {
             const elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - tick_start));
@@ -57,11 +55,16 @@ pub const TaskQueue = struct {
             if (idx >= self.tasks.items.len) idx = 0;
             if (self.tasks.items.len == 0) break;
 
-            const done = self.tasks.items[idx].func(self.tasks.items[idx].ctx);
+            const task = self.tasks.items[idx];
+            const done = task.func(task.ctx);
             did_work = true;
+
+            if (idx >= self.tasks.items.len) break;
+
             if (done) {
                 _ = self.tasks.orderedRemove(idx);
-                if (idx >= self.tasks.items.len and self.tasks.items.len > 0) idx = 0;
+                if (self.tasks.items.len == 0) break;
+                if (idx >= self.tasks.items.len) idx = 0;
             } else {
                 idx += 1;
             }

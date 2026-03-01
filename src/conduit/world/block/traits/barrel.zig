@@ -10,6 +10,7 @@ const BlockContainer = @import("../../../container/block-container.zig").BlockCo
 const trait_mod = @import("./trait.zig");
 const CompoundTag = @import("nbt").CompoundTag;
 const serialization = @import("../../provider/serialization.zig");
+const Logger = @import("Raknet").Logger;
 
 pub const State = struct {
     container: ?BlockContainer = null,
@@ -28,20 +29,15 @@ fn onDetach(state: *State, _: *Block) void {
 
 fn onSerialize(state: *State, tag: *CompoundTag) void {
     const container = &(state.container orelse return);
-    std.debug.print("barrel onSerialize: container size={d}\n", .{container.base.getSize()});
     const list = serialization.serializeContainer(tag.allocator, &container.base) catch return;
     tag.set("Items", .{ .List = list }) catch {};
 }
 
 fn onDeserialize(state: *State, tag: *const CompoundTag) void {
     const container = &(state.container orelse return);
-    const items_tag = tag.get("Items") orelse {
-        std.debug.print("barrel onDeserialize: no Items tag found\n", .{});
-        return;
-    };
+    const items_tag = tag.get("Items") orelse return;
     switch (items_tag) {
         .List => |list| {
-            std.debug.print("barrel onDeserialize: found {d} items\n", .{list.value.len});
             serialization.deserializeContainer(container.base.allocator, &container.base, &list);
         },
         else => {},
@@ -51,6 +47,7 @@ fn onDeserialize(state: *State, tag: *const CompoundTag) void {
 fn onInteract(state: *State, block: *Block, player: *Player) bool {
     const container = &(state.container orelse return true);
     _ = container.show(player, block.position);
+
     setOpenBit(block, true);
     sendSound(block, .BarrelOpen);
     return false;
@@ -71,6 +68,13 @@ fn onBreak(state: *State, block: *Block, _: ?*Player) bool {
 fn setOpenBit(block: *Block, open: bool) void {
     const perm = block.getPermutation(0) catch return;
     if (!perm.state.contains("open_bit")) return;
+
+    const current = perm.state.get("open_bit") orelse return;
+    const current_val = switch (current) {
+        .boolean => |b| b,
+        else => return,
+    };
+    if (current_val == open) return;
 
     const block_type = BlockType.get(perm.identifier) orelse return;
     var state = BlockState.init(block.allocator);

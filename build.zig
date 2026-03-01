@@ -62,7 +62,7 @@ pub fn build(b: *std.Build) void {
         .linkage = .static,
         .root_module = b.createModule(.{
             .target = target,
-            .optimize = optimize,
+            .optimize = .ReleaseFast,
         }),
     });
 

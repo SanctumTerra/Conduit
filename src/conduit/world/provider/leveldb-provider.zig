@@ -23,6 +23,23 @@ const TAG_BLOCK_ENTITY: u8 = 49;
 
 const trait_mod = @import("../block/traits/trait.zig");
 const Block = @import("../block/block.zig").Block;
+const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+
+pub const ChunkColumnData = struct {
+    has_version: bool = false,
+    subchunks: [chunk_mod.MAX_SUBCHUNKS]?[]const u8 = .{null} ** chunk_mod.MAX_SUBCHUNKS,
+    block_entity_data: ?[]const u8 = null,
+
+    pub fn deinit(self: *ChunkColumnData, allocator: std.mem.Allocator) void {
+        for (&self.subchunks) |*sc| {
+            if (sc.*) |data| {
+                allocator.free(data);
+                sc.* = null;
+            }
+        }
+        if (self.block_entity_data) |d| allocator.free(d);
+    }
+};
 
 pub const LevelDBProvider = struct {
     allocator: std.mem.Allocator,
@@ -106,6 +123,10 @@ pub const LevelDBProvider = struct {
 
         const dim_index = dimensionIndex(dimension);
         const offset = chunk_mod.yOffset(dimension.dimension_type);
+
+        var batch = try LevelDB.WriteBatch.init();
+        defer batch.deinit();
+
         for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
             if (chunk.subchunks[i]) |sc| {
                 if (sc.isEmpty()) continue;
@@ -113,27 +134,49 @@ pub const LevelDBProvider = struct {
                 defer stream.deinit();
                 try sc.serializePersistence(&stream, self.allocator);
                 const key = subchunkKey(chunk.x, chunk.z, @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset))), dim_index);
-                try self.db.put(key.slice(), stream.getBuffer());
+                batch.put(key.slice(), stream.getBuffer());
             }
         }
 
         const ver_key = versionKey(chunk.x, chunk.z, dim_index);
-        try self.db.put(ver_key.slice(), &[_]u8{40});
+        batch.put(ver_key.slice(), &[_]u8{40});
+
+        try batch.write(&self.db);
         chunk.dirty = false;
     }
 
     pub fn saveAll(self: *LevelDBProvider) void {
+        var batch = LevelDB.WriteBatch.init() catch return;
+        defer batch.deinit();
+
         var dim_iter = self.chunks.iterator();
         while (dim_iter.next()) |dim_entry| {
             const dimension = dim_entry.key_ptr.*;
+            const dim_index = dimensionIndex(dimension);
+            const offset = chunk_mod.yOffset(dimension.dimension_type);
             var chunk_iter = dim_entry.value_ptr.valueIterator();
             while (chunk_iter.next()) |chunk_ptr| {
                 const chunk = chunk_ptr.*;
-                if (chunk.dirty) {
-                    self.writeChunk(chunk, dimension) catch continue;
+                if (!chunk.dirty) continue;
+
+                for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
+                    if (chunk.subchunks[i]) |sc| {
+                        if (sc.isEmpty()) continue;
+                        var stream = BinaryStream.init(self.allocator, null, null);
+                        defer stream.deinit();
+                        sc.serializePersistence(&stream, self.allocator) catch continue;
+                        const key = subchunkKey(chunk.x, chunk.z, @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset))), dim_index);
+                        batch.put(key.slice(), stream.getBuffer());
+                    }
                 }
+
+                const ver_key = versionKey(chunk.x, chunk.z, dim_index);
+                batch.put(ver_key.slice(), &[_]u8{40});
+                chunk.dirty = false;
             }
         }
+
+        batch.write(&self.db) catch {};
     }
 
     pub fn writePlayer(self: *LevelDBProvider, uuid: []const u8, player: *Player) !void {
@@ -220,6 +263,8 @@ pub const LevelDBProvider = struct {
         const dim_index = dimensionIndex(dimension);
         const key = blockEntityKey(chunk.x, chunk.z, dim_index);
 
+        const chunk_blocks = dimension.getBlocksInChunk(chunk.x, chunk.z);
+
         var tags = std.ArrayList(NBT.Tag){ .items = &.{}, .capacity = 0 };
         defer {
             for (tags.items) |*t| {
@@ -231,12 +276,17 @@ pub const LevelDBProvider = struct {
             tags.deinit(self.allocator);
         }
 
-        var block_iter = dimension.blocks.iterator();
-        while (block_iter.next()) |entry| {
-            const block = entry.value_ptr.*;
-            const bx = block.position.x >> 4;
-            const bz = block.position.z >> 4;
-            if (bx != chunk.x or bz != chunk.z) continue;
+        for (chunk_blocks) |block| {
+            if (block.traits.items.len == 0) continue;
+
+            var has_serialize = false;
+            for (block.traits.items) |inst| {
+                if (inst.vtable.onSerialize != null) {
+                    has_serialize = true;
+                    break;
+                }
+            }
+            if (!has_serialize) continue;
 
             var tag = CompoundTag.init(self.allocator, null);
             tag.set("x", .{ .Int = NBT.IntTag.init(block.position.x, null) }) catch {
@@ -260,9 +310,16 @@ pub const LevelDBProvider = struct {
                 continue;
             };
 
-            block.fireEvent(.Serialize, .{&tag});
+            var trait_tags = std.ArrayList(NBT.Tag){ .items = &.{}, .capacity = 0 };
+            defer trait_tags.deinit(self.allocator);
+            for (block.traits.items) |instance| {
+                const duped = self.allocator.dupe(u8, instance.identifier) catch continue;
+                trait_tags.append(self.allocator, .{ .String = NBT.StringTag.init(duped, null) }) catch continue;
+            }
+            const trait_slice = trait_tags.toOwnedSlice(self.allocator) catch self.allocator.alloc(NBT.Tag, 0) catch &.{};
+            tag.set("traits", .{ .List = NBT.ListTag.init(@constCast(trait_slice), null) }) catch {};
 
-            std.debug.print("writeBlockEntities: saving block {s} at ({d},{d},{d})\n", .{ block.getIdentifier(), block.position.x, block.position.y, block.position.z });
+            block.fireEvent(.Serialize, .{&tag});
 
             tags.append(self.allocator, .{ .Compound = tag }) catch {
                 tag.deinit(self.allocator);
@@ -289,7 +346,10 @@ pub const LevelDBProvider = struct {
     pub fn readBlockEntities(self: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) !void {
         const dim_index = dimensionIndex(dimension);
         const key = blockEntityKey(chunk.x, chunk.z, dim_index);
-        const data = self.db.get(key.slice()) orelse return;
+        const data = self.db.get(key.slice()) orelse {
+            self.scanChunkForTraitBlocks(chunk, dimension);
+            return;
+        };
         defer LevelDB.DB.freeValue(data);
 
         var stream = BinaryStream.init(self.allocator, data, null);
@@ -311,11 +371,88 @@ pub const LevelDBProvider = struct {
             };
 
             const pos = Protocol.BlockPosition{ .x = x, .y = y, .z = z };
-            std.debug.print("readBlockEntities: loading block at ({d},{d},{d})\n", .{ x, y, z });
-            trait_mod.applyTraitsForBlock(self.allocator, dimension, pos) catch continue;
+            if (dimension.getBlockPtr(pos) != null) continue;
 
-            if (dimension.getBlockPtr(pos)) |block| {
-                block.fireEvent(.Deserialize, .{&tag});
+            const block = self.allocator.create(Block) catch continue;
+            block.* = Block.init(self.allocator, dimension, pos);
+
+            const traits_tag = tag.get("traits") orelse tag.get("Traits");
+            if (traits_tag) |tt| {
+                switch (tt) {
+                    .List => |list| {
+                        for (list.value) |item| {
+                            switch (item) {
+                                .String => |s| {
+                                    if (trait_mod.getTraitFactory(s.value)) |f| {
+                                        const instance = f(self.allocator) catch continue;
+                                        block.addTrait(instance) catch continue;
+                                    }
+                                },
+                                else => {},
+                            }
+                        }
+                    },
+                    else => {},
+                }
+            }
+
+            if (block.traits.items.len == 0) {
+                block.deinit();
+                self.allocator.destroy(block);
+                continue;
+            }
+
+            dimension.storeBlock(block) catch {
+                block.deinit();
+                self.allocator.destroy(block);
+                continue;
+            };
+
+            block.fireEvent(.Deserialize, .{&tag});
+        }
+
+        self.scanChunkForTraitBlocks(chunk, dimension);
+    }
+
+    fn scanChunkForTraitBlocks(self: *LevelDBProvider, chunk: *Chunk, dimension: *Dimension) void {
+        if (!trait_mod.hasAnyStaticTraits()) return;
+
+        const offset = chunk_mod.yOffset(dimension.dimension_type);
+        for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
+            const sc = chunk.subchunks[i] orelse continue;
+            if (sc.layers.items.len == 0) continue;
+            const layer = &sc.layers.items[0];
+
+            var trait_palette = std.AutoHashMap(u32, bool).init(self.allocator);
+            defer trait_palette.deinit();
+
+            for (layer.paletteSlice(), 0..) |network_id, pi| {
+                const perm = BlockPermutation.getByNetworkId(network_id) orelse continue;
+                if (std.mem.eql(u8, perm.identifier, "minecraft:air")) continue;
+                if (trait_mod.hasRegisteredTraits(perm.identifier)) {
+                    trait_palette.put(@intCast(pi), true) catch continue;
+                }
+            }
+
+            if (trait_palette.count() == 0) continue;
+
+            const sc_y: i32 = @as(i32, @intCast(i)) - @as(i32, @intCast(offset));
+            for (0..4096) |pos_idx| {
+                const palette_idx = layer.blocks[pos_idx];
+                if (!trait_palette.contains(palette_idx)) continue;
+
+                const bx: i32 = @intCast((pos_idx >> 8) & 0xf);
+                const by: i32 = @intCast(pos_idx & 0xf);
+                const bz: i32 = @intCast((pos_idx >> 4) & 0xf);
+
+                const world_x = chunk.x * 16 + bx;
+                const world_y = sc_y * 16 + by;
+                const world_z = chunk.z * 16 + bz;
+
+                const pos = Protocol.BlockPosition{ .x = world_x, .y = world_y, .z = world_z };
+                if (dimension.getBlockPtr(pos) != null) continue;
+
+                trait_mod.applyTraitsForBlock(self.allocator, dimension, pos) catch continue;
             }
         }
     }
@@ -332,9 +469,6 @@ pub const LevelDBProvider = struct {
     }
 
     pub fn readChunkDirect(self: *LevelDBProvider, x: i32, z: i32, dim_type: @import("protocol").DimensionType) !*Chunk {
-        const read_opts = LevelDB.DB.createReadOptions() orelse return error.Failed;
-        defer LevelDB.DB.destroyReadOptions(read_opts);
-
         const dim_index: i32 = switch (dim_type) {
             .Overworld => 0,
             .Nether => 1,
@@ -342,9 +476,9 @@ pub const LevelDBProvider = struct {
         };
 
         const ver_key = versionKey(x, z, dim_index);
-        const ver_data = self.db.getWithOpts(ver_key.slice(), read_opts) orelse blk: {
+        const ver_data = self.db.get(ver_key.slice()) orelse blk: {
             const old_key = versionKeyOld(x, z, dim_index);
-            break :blk self.db.getWithOpts(old_key.slice(), read_opts) orelse return error.ChunkNotFound;
+            break :blk self.db.get(old_key.slice()) orelse return error.ChunkNotFound;
         };
         LevelDB.DB.freeValue(ver_data);
 
@@ -355,10 +489,10 @@ pub const LevelDBProvider = struct {
         for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
             const sc_index: i8 = @intCast(@as(i32, @intCast(i)) - @as(i32, @intCast(offset)));
             const key = subchunkKey(x, z, sc_index, dim_index);
-            if (self.db.getWithOpts(key.slice(), read_opts)) |data| {
+            if (self.db.get(key.slice())) |data| {
                 defer LevelDB.DB.freeValue(data);
                 var stream = BinaryStream.init(self.allocator, data, null);
-                const sc = try self.allocator.create(SubChunk);
+                const sc = self.allocator.create(SubChunk) catch continue;
                 sc.* = SubChunk.deserialize(&stream, self.allocator) catch {
                     self.allocator.destroy(sc);
                     continue;
@@ -368,6 +502,55 @@ pub const LevelDBProvider = struct {
         }
 
         return chunk;
+    }
+
+    pub fn readChunkColumn(self: *LevelDBProvider, x: i32, z: i32, dim_type: Protocol.DimensionType, read_block_entities: bool) !ChunkColumnData {
+        const allocator = self.allocator;
+        const dim_index: i32 = switch (dim_type) {
+            .Overworld => 0,
+            .Nether => 1,
+            .End => 2,
+        };
+
+        const base = chunkKeyBase(x, z, dim_index);
+        var result = ChunkColumnData{};
+        errdefer result.deinit(allocator);
+
+        const offset = chunk_mod.yOffset(dim_type);
+        var iter = self.db.iterator();
+        defer iter.deinit();
+
+        iter.seek(base.buf[0..base.len]);
+
+        while (iter.valid()) {
+            const k = iter.key();
+            if (k.len < base.len or !std.mem.eql(u8, k[0..base.len], base.buf[0..base.len])) break;
+
+            const tag_byte = k[base.len];
+
+            if (tag_byte == TAG_VERSION or tag_byte == TAG_VERSION_OLD) {
+                result.has_version = true;
+            } else if (tag_byte == TAG_SUBCHUNK_PREFIX and k.len == base.len + 2) {
+                const sc_index: i8 = @bitCast(k[base.len + 1]);
+                const array_idx: i32 = @as(i32, sc_index) + @as(i32, @intCast(offset));
+                if (array_idx >= 0 and array_idx < chunk_mod.MAX_SUBCHUNKS) {
+                    const v = iter.value();
+                    result.subchunks[@intCast(array_idx)] = try allocator.dupe(u8, v);
+                }
+            } else if (tag_byte == TAG_BLOCK_ENTITY and read_block_entities) {
+                const v = iter.value();
+                result.block_entity_data = try allocator.dupe(u8, v);
+            }
+
+            iter.next();
+        }
+
+        if (!result.has_version) {
+            result.deinit(allocator);
+            return error.ChunkNotFound;
+        }
+
+        return result;
     }
 
     pub fn asProvider(self: *LevelDBProvider) WorldProvider {
@@ -537,4 +720,187 @@ fn digpKey(x: i32, z: i32, dim_index: i32) KeyBuf {
         key.len = 12;
     }
     return key;
+}
+
+test "WriteBatch chunk column round-trip" {
+    var db = try LevelDB.DB.open("test_prop4_db\x00", true);
+    defer {
+        db.close();
+        std.fs.cwd().deleteTree("test_prop4_db") catch {};
+    }
+
+    var rng = std.Random.DefaultPrng.init(0xdeadbeef);
+    const random = rng.random();
+
+    for (0..100) |iter| {
+        const x: i32 = @intCast(@as(i32, @truncate(@as(i64, @intCast(iter)))) - 50);
+        const z: i32 = @intCast(@as(i32, @truncate(@as(i64, @intCast(iter)))) + 10);
+        const dim_index: i32 = 0;
+
+        var batch = try LevelDB.WriteBatch.init();
+        defer batch.deinit();
+
+        const ver_key = versionKey(x, z, dim_index);
+        batch.put(ver_key.slice(), &[_]u8{40});
+
+        var expected_data: [chunk_mod.MAX_SUBCHUNKS]?[]u8 = .{null} ** chunk_mod.MAX_SUBCHUNKS;
+        defer {
+            for (&expected_data) |*d| {
+                if (d.*) |data| std.testing.allocator.free(data);
+            }
+        }
+
+        const num_subchunks = random.intRangeAtMost(usize, 1, 8);
+        for (0..num_subchunks) |i| {
+            const len = random.intRangeAtMost(usize, 4, 64);
+            const data = try std.testing.allocator.alloc(u8, len);
+            random.bytes(data);
+            expected_data[i] = data;
+
+            const sc_index: i8 = @intCast(@as(i32, @intCast(i)));
+            const key = subchunkKey(x, z, sc_index, dim_index);
+            batch.put(key.slice(), data);
+        }
+
+        try batch.write(&db);
+
+        const ver_read = db.get(ver_key.slice());
+        try std.testing.expect(ver_read != null);
+        LevelDB.DB.freeValue(ver_read.?);
+
+        for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
+            const sc_index: i8 = @intCast(@as(i32, @intCast(i)));
+            const key = subchunkKey(x, z, sc_index, dim_index);
+            const read_val = db.get(key.slice());
+            if (expected_data[i]) |expected| {
+                try std.testing.expect(read_val != null);
+                try std.testing.expectEqualSlices(u8, expected, read_val.?);
+                LevelDB.DB.freeValue(read_val.?);
+            } else {
+                try std.testing.expect(read_val == null);
+            }
+        }
+
+        var del_batch = try LevelDB.WriteBatch.init();
+        defer del_batch.deinit();
+        del_batch.delete(ver_key.slice());
+        for (0..num_subchunks) |i| {
+            const sc_index: i8 = @intCast(@as(i32, @intCast(i)));
+            const key = subchunkKey(x, z, sc_index, dim_index);
+            del_batch.delete(key.slice());
+        }
+        try del_batch.write(&db);
+    }
+}
+
+test "WriteBatch saveAll multi-chunk persistence" {
+    var db = try LevelDB.DB.open("test_prop6_db\x00", true);
+    defer {
+        db.close();
+        std.fs.cwd().deleteTree("test_prop6_db") catch {};
+    }
+
+    var rng = std.Random.DefaultPrng.init(0xcafebabe);
+    const random = rng.random();
+
+    const N = 100;
+    var keys: [N]KeyBuf = undefined;
+    var values: [N][8]u8 = undefined;
+
+    var batch = try LevelDB.WriteBatch.init();
+    defer batch.deinit();
+
+    for (0..N) |i| {
+        const x: i32 = random.intRangeAtMost(i32, -1000, 1000);
+        const z: i32 = random.intRangeAtMost(i32, -1000, 1000);
+        keys[i] = versionKey(x, z, 0);
+        random.bytes(&values[i]);
+        batch.put(keys[i].slice(), &values[i]);
+    }
+
+    try batch.write(&db);
+
+    for (0..N) |i| {
+        const read_val = db.get(keys[i].slice());
+        try std.testing.expect(read_val != null);
+        try std.testing.expectEqualSlices(u8, &values[i], read_val.?);
+        LevelDB.DB.freeValue(read_val.?);
+    }
+}
+
+test "readChunkColumn skips block entities when flag is false" {
+    var provider = try LevelDBProvider.init(std.testing.allocator, "test_prop5_db\x00");
+    defer {
+        provider.deinit();
+        std.fs.cwd().deleteTree("test_prop5_db") catch {};
+    }
+
+    var rng = std.Random.DefaultPrng.init(0xfeed1234);
+    const random = rng.random();
+
+    for (0..100) |iter| {
+        const x: i32 = @intCast(@as(i32, @truncate(@as(i64, @intCast(iter)))) - 50);
+        const z: i32 = @intCast(@as(i32, @truncate(@as(i64, @intCast(iter)))) + 20);
+        const dim_index: i32 = 0;
+
+        var batch = try LevelDB.WriteBatch.init();
+        defer batch.deinit();
+
+        const ver_key = versionKey(x, z, dim_index);
+        batch.put(ver_key.slice(), &[_]u8{40});
+
+        const num_sc = random.intRangeAtMost(usize, 1, 4);
+        var expected_sc: [chunk_mod.MAX_SUBCHUNKS]?[]u8 = .{null} ** chunk_mod.MAX_SUBCHUNKS;
+        defer {
+            for (&expected_sc) |*d| {
+                if (d.*) |data| std.testing.allocator.free(data);
+            }
+        }
+
+        for (0..num_sc) |i| {
+            const len = random.intRangeAtMost(usize, 4, 32);
+            const data = try std.testing.allocator.alloc(u8, len);
+            random.bytes(data);
+            expected_sc[i] = data;
+            const sc_index: i8 = @intCast(@as(i32, @intCast(i)));
+            const key = subchunkKey(x, z, sc_index, dim_index);
+            batch.put(key.slice(), data);
+        }
+
+        var be_data: [16]u8 = undefined;
+        random.bytes(&be_data);
+        const be_key = blockEntityKey(x, z, dim_index);
+        batch.put(be_key.slice(), &be_data);
+
+        try batch.write(&provider.db);
+
+        var col_skip = try provider.readChunkColumn(x, z, .Overworld, false);
+        defer col_skip.deinit(std.testing.allocator);
+        try std.testing.expect(col_skip.has_version);
+        try std.testing.expect(col_skip.block_entity_data == null);
+        for (0..chunk_mod.MAX_SUBCHUNKS) |i| {
+            if (expected_sc[i]) |expected| {
+                try std.testing.expect(col_skip.subchunks[i] != null);
+                try std.testing.expectEqualSlices(u8, expected, col_skip.subchunks[i].?);
+            } else {
+                try std.testing.expect(col_skip.subchunks[i] == null);
+            }
+        }
+
+        var col_full = try provider.readChunkColumn(x, z, .Overworld, true);
+        defer col_full.deinit(std.testing.allocator);
+        try std.testing.expect(col_full.block_entity_data != null);
+        try std.testing.expectEqualSlices(u8, &be_data, col_full.block_entity_data.?);
+
+        var del_batch = try LevelDB.WriteBatch.init();
+        defer del_batch.deinit();
+        del_batch.delete(ver_key.slice());
+        del_batch.delete(be_key.slice());
+        for (0..num_sc) |i| {
+            const sc_index: i8 = @intCast(@as(i32, @intCast(i)));
+            const key = subchunkKey(x, z, sc_index, dim_index);
+            del_batch.delete(key.slice());
+        }
+        try del_batch.write(&provider.db);
+    }
 }
