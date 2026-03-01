@@ -25,6 +25,7 @@ const handleInventoryTransaction = @import("./handlers/inventory-transaction.zig
 const handleItemStackRequest = @import("./handlers/item-stack-request.zig").handleItemStackRequest;
 const handlePlayerAction = @import("./handlers/player-action.zig").handlePlayerAction;
 const handleCommandRequest = @import("./handlers/command-request.zig").handleCommandRequest;
+const handleBlockPickRequest = @import("./handlers/block-pick-request.zig").handleBlockPickRequest;
 
 pub const NetworkHandler = struct {
     conduit: *Conduit,
@@ -200,10 +201,16 @@ pub const NetworkHandler = struct {
                 ) catch |err| {
                     Raknet.Logger.ERROR("PacketViolationWarning error: {any}", .{err});
                 },
+                Packet.BlockPickRequest => handleBlockPickRequest(
+                    self,
+                    conn,
+                    &stream,
+                ) catch |err| {
+                    Raknet.Logger.ERROR("BlockPickRequest error: {any}", .{err});
+                },
                 Packet.EmoteList,
                 Packet.ServerboundLoadingScreenPacket,
                 Packet.SetPlayerInventoryOptions,
-                Packet.BlockPickRequest,
                 => {},
                 else => Raknet.Logger.INFO("Unhandled packet 0x{x}", .{id}),
             }

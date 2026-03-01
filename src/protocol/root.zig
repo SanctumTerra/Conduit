@@ -110,6 +110,7 @@ pub const ItemRegistryPacket = @import("./packets/item-registry.zig").ItemRegist
 pub const ItemRegistryEntry = @import("./packets/item-registry.zig").ItemRegistryEntry;
 pub const ContainerOpenPacket = @import("./packets/container-open.zig").ContainerOpenPacket;
 pub const BlockActorDataPacket = @import("./packets/block-actor-data.zig").BlockActorDataPacket;
+pub const BlockPickRequestPacket = @import("./packets/block-pick-request.zig").BlockPickRequestPacket;
 pub const ContainerClosePacket = @import("./packets/container-close.zig").ContainerClosePacket;
 pub const InventoryContentPacket = @import("./packets/inventory-content.zig").InventoryContentPacket;
 pub const InteractPacket = @import("./packets/interact.zig").InteractPacket;

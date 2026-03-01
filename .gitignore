@@ -11,6 +11,7 @@ dump
 .bun
 .build
 .test
+.claude
 
 server.properties
 worlds/
