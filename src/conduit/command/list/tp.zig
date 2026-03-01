@@ -9,10 +9,10 @@ const types = @import("../types.zig");
 pub fn register(registry: *CommandRegistry) !void {
     const cmd = try Command.init(
         registry.allocator,
-        "tp",
+        "teleport",
         "Teleport to a player or coordinates",
         "conduit.command.tp",
-        &.{"teleport"},
+        &.{"tp"},
         @ptrCast(&handle),
     );
     try cmd.addOverload(&.{
