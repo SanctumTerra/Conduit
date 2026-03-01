@@ -34,6 +34,7 @@ pub const MovePlayerPacket = struct {
             try stream.writeUint32(0, .Little);
             try stream.writeUint32(0, .Little);
         }
+        try stream.writeVarLong(self.tick);
         return stream.getBuffer();
     }
 };
