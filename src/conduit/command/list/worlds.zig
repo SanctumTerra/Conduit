@@ -53,13 +53,13 @@ fn handle(raw: *anyopaque) void {
     const writer = fbs.writer();
 
     if (trimmed.len == 0) {
-        std.fmt.format(writer, "Worlds ({d}):", .{conduit.worlds.count()}) catch return;
+        std.fmt.format(writer, "Worlds (§v{d}§r):", .{conduit.worlds.count()}) catch return;
         var it = conduit.worlds.valueIterator();
         while (it.next()) |world| {
-            std.fmt.format(writer, "\n  {s}:", .{world.*.identifier}) catch return;
+            std.fmt.format(writer, "\n  §v{s}§r:", .{world.*.identifier}) catch return;
             var dim_it = world.*.dimensions.valueIterator();
             while (dim_it.next()) |dim| {
-                std.fmt.format(writer, "\n    {s} (spawn: {d},{d},{d})", .{
+                std.fmt.format(writer, "\n    §b{s}§r (§7spawn: §a{d}§7,§a{d}§7,§a{d}§r)", .{
                     dim.*.identifier,
                     dim.*.spawn_position.x,
                     dim.*.spawn_position.y,
