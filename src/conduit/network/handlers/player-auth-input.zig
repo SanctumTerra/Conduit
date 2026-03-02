@@ -84,8 +84,7 @@ fn handleItemUseTransaction(
 ) !void {
     if (transaction.actionType != 0) return;
 
-    const world = network.conduit.getWorld("world") orelse return;
-    const dimension = world.getDimension("overworld") orelse return;
+    const dimension = player.entity.dimension orelse return;
 
     const inv_state = player.entity.getTraitState(InventoryTrait.InventoryTrait) orelse return;
     const held = InventoryTrait.getHeldItem(inv_state) orelse return;
@@ -147,8 +146,7 @@ fn handleBlockAction(
     player: *Player,
     action: Protocol.PlayerBlockAction,
 ) !void {
-    const world = network.conduit.getWorld("world") orelse return;
-    const dimension = world.getDimension("overworld") orelse return;
+    const dimension = player.entity.dimension orelse return;
 
     switch (action.action) {
         .StartBreak, .ContinueDestroyBlock => {
@@ -208,7 +206,7 @@ fn handleBlockAction(
                     defer spawned.deinit(network.allocator);
                     for (break_event.getDrops()) |drop| {
                         const drop_item_type = ItemType.get(drop.identifier) orelse continue;
-                        const entity = dimension.spawnItemEntity(drop_item_type, drop.count, spawn_pos) catch continue;
+                        const entity = dimension.spawnItemEntity(drop_item_type, drop.count, spawn_pos, 10, Protocol.Vector3f.init(0, 0.25, 0)) catch continue;
                         spawned.append(network.allocator, entity) catch {};
                     }
                     break_event.entities = spawned.items;

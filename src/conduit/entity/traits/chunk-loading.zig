@@ -46,6 +46,7 @@ fn onTick(state: *State, entity: *Entity) void {
 
     if (!state.initialized) {
         state.initialized = true;
+        player.sent_chunks.clearRetainingCapacity();
         sendPublisherUpdate(player);
         queueChunkStreaming(player) catch {};
         return;
@@ -83,11 +84,20 @@ fn updatePlayerVisibility(player: *Player) void {
         if (other.entity.runtime_id == player.entity.runtime_id) continue;
         if (!other.spawned) continue;
 
+        const currently_visible = player.visible_players.contains(other.entity.runtime_id);
+
+        if (other.entity.dimension != player.entity.dimension) {
+            if (currently_visible) {
+                despawnPlayerFor(player, other, allocator);
+                _ = player.visible_players.remove(other.entity.runtime_id);
+            }
+            continue;
+        }
+
         const dx = player.entity.position.x - other.entity.position.x;
         const dz = player.entity.position.z - other.entity.position.z;
         const dist_sq = dx * dx + dz * dz;
         const in_range = dist_sq <= range_sq;
-        const currently_visible = player.visible_players.contains(other.entity.runtime_id);
 
         if (in_range and !currently_visible) {
             spawnPlayerFor(player, other, allocator);
@@ -166,6 +176,7 @@ fn despawnPlayerFor(viewer: *Player, target: *Player, allocator: std.mem.Allocat
 
 const ChunkStreamState = struct {
     conduit: *Conduit,
+    dimension: *Dimension,
     runtime_id: i64,
     allocator: std.mem.Allocator,
     center_x: i32,
@@ -181,8 +192,7 @@ const MAX_INFLIGHT_BATCHES: u32 = 8;
 
 pub fn queueChunkStreaming(player: *Player) !void {
     const conduit = player.network.conduit;
-    const world = conduit.getWorld("world") orelse return;
-    const dimension = world.getDimension("overworld") orelse return;
+    const dimension = player.entity.dimension orelse return;
     const allocator = player.entity.allocator;
 
     conduit.tasks.cancelByOwner("chunk_streaming", player.entity.runtime_id, destroyStreamState);
@@ -213,6 +223,7 @@ pub fn queueChunkStreaming(player: *Player) !void {
     const state = try allocator.create(ChunkStreamState);
     state.* = .{
         .conduit = conduit,
+        .dimension = dimension,
         .runtime_id = player.entity.runtime_id,
         .allocator = allocator,
         .center_x = center_x,
@@ -267,6 +278,7 @@ const ChunkBatchWork = struct {
     count: usize,
     runtime_id: i64,
     conduit: *Conduit,
+    dimension: *Dimension,
     allocator: std.mem.Allocator,
     arena: std.heap.ArenaAllocator,
     options: CompressionOptions,
@@ -314,7 +326,7 @@ fn workerLoadAndCompress(ctx: *anyopaque) void {
             work.block_data[i] = workerReadBlockData(arena_alloc, work.provider, chunk, work.dim_type);
         }
 
-        const pkt = serializeChunkPacket(allocator, chunk, coord.x, coord.z) orelse {
+        const pkt = serializeChunkPacket(allocator, chunk, coord.x, coord.z, work.dim_type) orelse {
             work.packets[i] = &.{};
             continue;
         };
@@ -547,8 +559,19 @@ fn onBatchComplete(ctx: *anyopaque) void {
         return;
     };
 
-    const world = work.conduit.getWorld("world");
-    const dimension = if (world) |w| w.getDimension("overworld") else null;
+    if (player.entity.dimension != work.dimension) {
+        for (0..work.count) |i| {
+            if (work.packets[i].len > 0) allocator.free(work.packets[i]);
+            if (work.chunks[i]) |chunk| {
+                var c = chunk;
+                c.deinit();
+                allocator.destroy(c);
+            }
+        }
+        return;
+    }
+
+    const dimension: ?*Dimension = work.dimension;
     const sim_dist = if (dimension) |d| d.simulation_distance else work.sim_distance;
 
     var t0 = std.time.nanoTimestamp();
@@ -760,7 +783,7 @@ fn cleanupBatchWork(ctx: *anyopaque) void {
     allocator.destroy(work);
 }
 
-fn serializeChunkPacket(allocator: std.mem.Allocator, chunk: *Chunk, cx: i32, cz: i32) ?[]const u8 {
+fn serializeChunkPacket(allocator: std.mem.Allocator, chunk: *Chunk, cx: i32, cz: i32, dim_type: Protocol.DimensionType) ?[]const u8 {
     var chunk_stream = BinaryStream.init(allocator, null, null);
     defer chunk_stream.deinit();
     chunk.serialize(&chunk_stream) catch return null;
@@ -771,7 +794,7 @@ fn serializeChunkPacket(allocator: std.mem.Allocator, chunk: *Chunk, cx: i32, cz
     var level_chunk = Protocol.LevelChunkPacket{
         .x = cx,
         .z = cz,
-        .dimension = .Overworld,
+        .dimension = dim_type,
         .highestSubChunkCount = 0,
         .subChunkCount = @intCast(chunk.getSubChunkSendCount()),
         .cacheEnabled = false,
@@ -802,14 +825,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
         return true;
     };
 
-    const world = state.conduit.getWorld("world") orelse {
-        allocator.destroy(state);
-        return true;
-    };
-    const dimension = world.getDimension("overworld") orelse {
-        allocator.destroy(state);
-        return true;
-    };
+    const dimension = state.dimension;
 
     while (state.inflight < MAX_INFLIGHT_BATCHES and state.ring <= state.radius) {
         var coord_buf: [BATCH_SIZE]ChunkCoord = undefined;
@@ -920,9 +936,10 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             .conduit = state.conduit,
             .allocator = allocator,
             .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+            .dimension = dimension,
             .options = player.network.options,
-            .provider = world.provider,
-            .dim_type = .Overworld,
+            .provider = dimension.world.provider,
+            .dim_type = dimension.dimension_type,
             .generator = if (dimension.generator) |gen| gen.generator else null,
             .sim_distance = dimension.simulation_distance,
             .center_x = state.center_x,

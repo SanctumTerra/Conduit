@@ -367,7 +367,7 @@ pub const Dimension = struct {
         self.pending_removals.clearRetainingCapacity();
     }
 
-    pub fn spawnItemEntity(self: *Dimension, item_type: *ItemType, count: u16, position: Protocol.Vector3f) !*Entity {
+    pub fn spawnItemEntity(self: *Dimension, item_type: *ItemType, count: u16, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !*Entity {
         const BinaryStream = @import("BinaryStream").BinaryStream;
 
         if (tryMergeNearby(self, item_type.identifier, count, position)) |existing| {
@@ -415,12 +415,13 @@ pub const Dimension = struct {
         const pickup = try ItemEntityTrait.create(self.allocator, .{
             .item_identifier = item_type.identifier,
             .count = count,
-            .pickup_delay = 10,
+            .pickup_delay = pickup_delay,
             .lifetime = 0,
             .pending_remove = false,
         });
         try entity.addTrait(pickup);
 
+        entity.motion = velocity;
         try self.entities.put(entity.runtime_id, entity);
 
         var item_stack = ItemStack.init(self.allocator, item_type, .{ .stackSize = count });
@@ -435,7 +436,7 @@ pub const Dimension = struct {
             .runtimeEntityId = @bitCast(entity.runtime_id),
             .item = net_item,
             .position = position,
-            .velocity = Protocol.Vector3f.init(0, 0.25, 0),
+            .velocity = velocity,
         };
         const serialized = try packet.serialize(&stream, self.allocator);
 

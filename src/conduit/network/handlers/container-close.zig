@@ -19,7 +19,7 @@ pub fn handleContainerClose(
             container.close(player, false);
 
             if (container.occupants.count() == 0) {
-                trySendBlockClose(network, container);
+                trySendBlockClose(player, network, container);
             }
         } else {
             player.opened_container = null;
@@ -48,12 +48,11 @@ pub fn handleContainerClose(
     }
 }
 
-fn trySendBlockClose(network: *NetworkHandler, container: *@import("../../container/container.zig").Container) void {
+fn trySendBlockClose(player: *@import("../../player/player.zig").Player, network: *NetworkHandler, container: *@import("../../container/container.zig").Container) void {
     const block_container: *BlockContainer = @fieldParentPtr("base", container);
     const position = block_container.position orelse return;
 
-    const world = network.conduit.getWorld("world") orelse return;
-    const dimension = world.getDimension("overworld") orelse return;
+    const dimension = player.entity.dimension orelse return;
     const block = dimension.getBlockPtr(position) orelse return;
 
     if (block.hasTrait(BarrelTrait.identifier)) {

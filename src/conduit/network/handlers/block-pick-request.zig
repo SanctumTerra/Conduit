@@ -23,15 +23,7 @@ pub fn handleBlockPickRequest(
 
     const inv = &inv_state.container.base;
 
-    const world = network.conduit.getWorld("world") orelse {
-        Raknet.Logger.ERROR("Failed to get world", .{});
-        return;
-    };
-
-    const dimension = world.getDimension("overworld") orelse {
-        Raknet.Logger.ERROR("Failed to get dimension", .{});
-        return;
-    };
+    const dimension = player.entity.dimension orelse return;
 
     const perm = dimension.getPermutation(packet.position, 0) catch |err| {
         Raknet.Logger.ERROR("Failed to get permutation: {any}", .{err});

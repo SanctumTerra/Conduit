@@ -143,20 +143,48 @@ pub const Conduit = struct {
             Raknet.Logger.INFO("Loaded {d} creative groups and {d} creative items", .{ cc.group_count, cc.item_count });
         }
 
-        const props = Generator.GeneratorProperties.init(null, .Overworld);
-        const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
-        const threaded = try Generator.ThreadedGenerator.init(self.allocator, superflat.asGenerator(), null);
+        if (std.fs.cwd().openDir("worlds", .{ .iterate = true })) |worlds_dir_val| {
+            var worlds_dir = worlds_dir_val;
+            defer worlds_dir.close();
+            var dir_it = worlds_dir.iterate();
+            while (dir_it.next() catch null) |entry| {
+                if (entry.kind != .directory) continue;
+                var path_buf: [512]u8 = undefined;
+                const db_path = std.fmt.bufPrintZ(&path_buf, "worlds/{s}/db", .{entry.name}) catch continue;
+                std.fs.cwd().makePath(db_path) catch {};
+                const provider = LevelDBProvider.init(self.allocator, db_path) catch |err| {
+                    Raknet.Logger.ERROR("Failed to open world '{s}': {any}", .{ entry.name, err });
+                    continue;
+                };
+                const props = Generator.GeneratorProperties.init(null, .Overworld);
+                const superflat = Generator.SuperflatGenerator.init(self.allocator, props) catch continue;
+                const threaded = Generator.ThreadedGenerator.init(self.allocator, superflat.asGenerator(), null) catch continue;
+                const world = self.createWorld(entry.name, provider.asProvider()) catch continue;
+                const dim = world.createDimension("overworld", .Overworld, threaded) catch continue;
+                dim.simulation_distance = @intCast(self.config.simulation_distance);
+                var level_dat_buf: [512]u8 = undefined;
+                const level_dat_path = std.fmt.bufPrint(&level_dat_buf, "worlds/{s}/level.dat", .{entry.name}) catch continue;
+                if (readLevelDatSpawn(self.allocator, level_dat_path)) |spawn| {
+                    dim.spawn_position = spawn;
+                    Raknet.Logger.INFO("World '{s}' spawn: {d}, {d}, {d}", .{ entry.name, spawn.x, spawn.y, spawn.z });
+                } else |_| {}
+                Raknet.Logger.INFO("Loaded world: {s}", .{entry.name});
+            }
+        } else |_| {
+            std.fs.cwd().makeDir("worlds") catch {};
+        }
 
-        std.fs.cwd().makePath("worlds/world/db") catch {};
-        const leveldb_provider = try LevelDBProvider.init(self.allocator, "worlds/world/db");
-        var world = try self.createWorld("world", leveldb_provider.asProvider());
-        const dim = try world.createDimension("overworld", .Overworld, threaded);
-        dim.simulation_distance = @intCast(self.config.simulation_distance);
-
-        if (readLevelDatSpawn(self.allocator, "worlds/world/level.dat")) |spawn| {
-            dim.spawn_position = spawn;
-            Raknet.Logger.INFO("World spawn: {d}, {d}, {d}", .{ spawn.x, spawn.y, spawn.z });
-        } else |_| {}
+        if (self.worlds.count() == 0) {
+            Raknet.Logger.INFO("No worlds found, creating default world", .{});
+            std.fs.cwd().makePath("worlds/world/db") catch {};
+            const leveldb_provider = try LevelDBProvider.init(self.allocator, "worlds/world/db");
+            const props = Generator.GeneratorProperties.init(null, .Overworld);
+            const superflat = try Generator.SuperflatGenerator.init(self.allocator, props);
+            const threaded = try Generator.ThreadedGenerator.init(self.allocator, superflat.asGenerator(), null);
+            const world = try self.createWorld("world", leveldb_provider.asProvider());
+            const dim = try world.createDimension("overworld", .Overworld, threaded);
+            dim.simulation_distance = @intCast(self.config.simulation_distance);
+        }
 
         self.network = try NetworkHandler.init(self);
 
@@ -170,10 +198,13 @@ pub const Conduit = struct {
             @import("./command/list/ban.zig"),
             @import("./command/list/give.zig"),
             @import("./command/list/weather.zig"),
+            @import("./command/list/op.zig"),
         };
         inline for (commands) |cmd| {
             try cmd.register(&self.command_registry);
         }
+        try @import("./command/list/worlds.zig").register(&self.command_registry, self);
+        try @import("./command/list/world.zig").register(&self.command_registry, self);
 
         self.raknet.setTickCallback(onTick, self);
         try self.threaded_tasks.start();
@@ -263,6 +294,8 @@ pub const Conduit = struct {
 
         self.tick_count += 1;
 
+        self.network.drainPackets();
+
         var phase_start = std.time.nanoTimestamp();
         const snapshots = self.getPlayerSnapshots();
         for (snapshots) |player| {
@@ -333,7 +366,7 @@ pub const Conduit = struct {
 
         const world = try self.allocator.create(World);
         world.* = try World.init(self, self.allocator, identifier, provider);
-        try self.worlds.put(identifier, world);
+        try self.worlds.put(world.identifier, world);
         return world;
     }
 

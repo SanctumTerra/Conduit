@@ -13,6 +13,12 @@ pub const InventoryAction = struct {
     inventorySlot: u32,
 };
 
+pub const NormalTransactionData = struct {
+    is_drop: bool = false,
+    drop_slot: u32 = 0,
+    drop_count: u16 = 0,
+};
+
 pub const UseItemTransactionData = struct {
     actionType: u32,
     triggerType: u32,
@@ -40,7 +46,7 @@ pub const ReleaseItemTransactionData = struct {
 };
 
 pub const TransactionData = union(enum) {
-    normal: void,
+    normal: NormalTransactionData,
     mismatch: void,
     useItem: UseItemTransactionData,
     useItemOnEntity: UseItemOnEntityTransactionData,

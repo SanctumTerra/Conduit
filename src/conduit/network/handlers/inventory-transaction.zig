@@ -21,6 +21,30 @@ pub fn handleInventoryTransaction(
     const packet = try Protocol.InventoryTransactionPacket.deserialize(stream);
 
     switch (packet.transactionType) {
+        .Normal => {
+            const data = packet.transactionData.normal;
+            if (!data.is_drop or data.drop_count == 0) return;
+
+            const dimension = player.entity.dimension orelse return;
+            const inv_state = player.entity.getTraitState(InventoryTrait.InventoryTrait) orelse return;
+            const item = inv_state.container.base.getItem(inv_state.selected_slot) orelse return;
+            const count = @min(if (data.drop_count == 0) @as(u16, 1) else data.drop_count, item.stackSize);
+            const item_type = item.item_type;
+
+            const pos = player.entity.position;
+            const yaw = player.entity.rotation.y * std.math.pi / 180.0;
+            const pitch = player.entity.rotation.x * std.math.pi / 180.0;
+            const throw_vel = Protocol.Vector3f.init(
+                -@sin(yaw) * @cos(pitch) * 0.3,
+                -@sin(pitch) * 0.3 + 0.1,
+                @cos(yaw) * @cos(pitch) * 0.3,
+            );
+            const spawn_pos = Protocol.Vector3f.init(pos.x, pos.y + 1.25, pos.z);
+            _ = dimension.spawnItemEntity(item_type, count, spawn_pos, 40, throw_vel) catch return;
+
+            inv_state.container.base.removeItem(inv_state.selected_slot, count);
+            inv_state.container.updateSlot(inv_state.selected_slot);
+        },
         .UseItem => {
             const data = packet.transactionData.useItem;
             try handleUseItem(network, player, data);
@@ -56,8 +80,7 @@ fn handleUseItem(
 ) !void {
     if (data.actionType != 0) return;
 
-    const world = network.conduit.getWorld("world") orelse return;
-    const dimension = world.getDimension("overworld") orelse return;
+    const dimension = player.entity.dimension orelse return;
 
     if (!player.entity.flags.getFlag(.Sneaking)) {
         if (dimension.getBlockPtr(data.blockPosition)) |clicked_block| {

@@ -7,6 +7,7 @@ const TransactionTypes = @import("../types/inventory-transaction-data.zig");
 
 pub const TransactionType = @import("../enums/transaction-type.zig").TransactionType;
 pub const TransactionData = TransactionTypes.TransactionData;
+pub const NormalTransactionData = TransactionTypes.NormalTransactionData;
 pub const UseItemTransactionData = TransactionTypes.UseItemTransactionData;
 pub const UseItemOnEntityTransactionData = TransactionTypes.UseItemOnEntityTransactionData;
 pub const ReleaseItemTransactionData = TransactionTypes.ReleaseItemTransactionData;
@@ -39,12 +40,17 @@ pub const InventoryTransactionPacket = struct {
         const transactionType: TransactionType = std.meta.intToEnum(TransactionType, transactionTypeRaw) catch return error.InvalidTransactionType;
 
         const actionCount = try stream.readVarInt();
+        var normal_data = NormalTransactionData{};
         for (0..actionCount) |_| {
-            try skipInventoryAction(stream);
+            if (transactionType == .Normal) {
+                try readNormalAction(stream, &normal_data);
+            } else {
+                try skipInventoryAction(stream);
+            }
         }
 
         const transactionData: TransactionData = switch (transactionType) {
-            .Normal => .{ .normal = {} },
+            .Normal => .{ .normal = normal_data },
             .Mismatch => .{ .mismatch = {} },
             .UseItem => .{ .useItem = try readUseItem(stream) },
             .UseItemOnEntity => .{ .useItemOnEntity = try readUseItemOnEntity(stream) },
@@ -113,6 +119,44 @@ fn readReleaseItem(stream: *BinaryStream) !ReleaseItemTransactionData {
         .hotBarSlot = hotBarSlot,
         .headPosition = headPosition,
     };
+}
+
+fn readNormalAction(stream: *BinaryStream, data: *NormalTransactionData) !void {
+    const source_type = try stream.readVarInt();
+    switch (source_type) {
+        0, 99999 => _ = try stream.readZigZag(),
+        2 => _ = try stream.readVarInt(),
+        else => {},
+    }
+    const slot = try stream.readVarInt();
+
+    const old_net_id = try stream.readZigZag();
+    if (old_net_id != 0) {
+        _ = try stream.readUint16(.Little);
+        _ = try stream.readVarInt();
+        if (try stream.readBool()) _ = try stream.readZigZag();
+        _ = try stream.readZigZag();
+        const extra_len = try stream.readVarInt();
+        for (0..extra_len) |_| _ = try stream.readUint8();
+    }
+
+    const new_net_id = try stream.readZigZag();
+    var new_count: u16 = 0;
+    if (new_net_id != 0) {
+        new_count = try stream.readUint16(.Little);
+        _ = try stream.readVarInt();
+        if (try stream.readBool()) _ = try stream.readZigZag();
+        _ = try stream.readZigZag();
+        const extra_len = try stream.readVarInt();
+        for (0..extra_len) |_| _ = try stream.readUint8();
+    }
+
+    if (source_type == 0) {
+        data.drop_slot = slot;
+    } else if (source_type == 2) {
+        data.is_drop = true;
+        data.drop_count = new_count;
+    }
 }
 
 fn skipInventoryAction(stream: *BinaryStream) !void {

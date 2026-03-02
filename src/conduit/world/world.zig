@@ -27,7 +27,7 @@ pub const World = struct {
         return World{
             .conduit = conduit,
             .allocator = allocator,
-            .identifier = identifier,
+            .identifier = try allocator.dupe(u8, identifier),
             .dimensions = std.StringHashMap(*Dimension).init(allocator),
             .provider = prov,
         };
@@ -60,5 +60,6 @@ pub const World = struct {
         }
         self.dimensions.deinit();
         self.provider.deinit();
+        self.allocator.free(self.identifier);
     }
 };

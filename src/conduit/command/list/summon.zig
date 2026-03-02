@@ -98,8 +98,7 @@ fn handle(raw: *anyopaque) void {
         return;
     };
 
-    const world = ctx.network.conduit.getWorld("world") orelse return;
-    const dimension = world.getDimension("overworld") orelse return;
+    const dimension = ctx.player.entity.dimension orelse return;
 
     const pos = ctx.player.entity.position;
     const spawn_pos = Protocol.Vector3f.init(pos.x, pos.y - 1.62, pos.z);

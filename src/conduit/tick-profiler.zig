@@ -41,6 +41,17 @@ pub const TickProfiler = struct {
         self.record(.total, total_ns);
     }
 
+    pub fn avgTickMs(self: *const TickProfiler) f64 {
+        const s = self.phases[@intFromEnum(Phase.total)];
+        if (s.count == 0) return 0.0;
+        return @as(f64, @floatFromInt(s.total_ns / s.count)) / 1_000_000.0;
+    }
+
+    pub fn slowTickPct(self: *const TickProfiler) f64 {
+        if (self.total_ticks == 0) return 0.0;
+        return @as(f64, @floatFromInt(self.slow_ticks)) / @as(f64, @floatFromInt(self.total_ticks)) * 100.0;
+    }
+
     pub fn writeReport(self: *const TickProfiler, path: []const u8) void {
         const file = std.fs.cwd().createFile(path, .{}) catch return;
         defer file.close();

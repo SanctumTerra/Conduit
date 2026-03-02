@@ -126,6 +126,7 @@ pub const TakeItemActorPacket = @import("./packets/take-item-actor.zig").TakeIte
 pub const RemoveEntityPacket = @import("./packets/remove-entity.zig").RemoveEntityPacket;
 pub const ActorEventPacket = @import("./packets/actor-event.zig").ActorEventPacket;
 pub const ActorEventType = @import("./packets/actor-event.zig").ActorEventType;
+pub const ChangeDimensionPacket = @import("./packets/change-dimension.zig").ChangeDimensionPacket;
 pub const SetActorMotionPacket = @import("./packets/set-actor-motion.zig").SetActorMotionPacket;
 pub const UpdateBlockPacket = @import("./packets/update-block.zig").UpdateBlockPacket;
 pub const BlockEventPacket = @import("./packets/block-event.zig").BlockEventPacket;

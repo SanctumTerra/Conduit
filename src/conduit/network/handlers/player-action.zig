@@ -17,12 +17,29 @@ pub fn handlePlayerAction(
 
     switch (packet.action) {
         .Respawn => {},
-        .DimensionChangeDone => {},
+        .DimensionChangeDone => {
+            if (player.pending_dimension) |dim| {
+                const spawn = dim.spawn_position;
+                player.entity.position = Protocol.Vector3f.init(
+                    @as(f32, @floatFromInt(spawn.x)) + 0.5,
+                    @as(f32, @floatFromInt(spawn.y)),
+                    @as(f32, @floatFromInt(spawn.z)) + 0.5,
+                );
+                player.entity.dimension = dim;
+                player.pending_dimension = null;
+                player.spawned = true;
+
+                var str = BinaryStream.init(network.allocator, null, null);
+                defer str.deinit();
+                var status = Protocol.PlayStatusPacket{ .status = .PlayerSpawn };
+                const serialized = status.serialize(&str) catch return;
+                network.sendPacket(player.connection, serialized) catch {};
+            }
+        },
         .StartItemUseOn => {},
         .StopItemUseOn => {},
         .CreativePlayerDestroyBlock => {
-            const world = network.conduit.getWorld("world") orelse return;
-            const dimension = world.getDimension("overworld") orelse return;
+            const dimension = player.entity.dimension orelse return;
             const pos = packet.blockPosition;
 
             const perm = dimension.getPermutation(pos, 0) catch return;
@@ -56,7 +73,7 @@ pub fn handlePlayerAction(
                     defer spawned.deinit(network.allocator);
                     for (break_event.getDrops()) |drop| {
                         const drop_item_type = ItemType.get(drop.identifier) orelse continue;
-                        const entity = dimension.spawnItemEntity(drop_item_type, drop.count, spawn_pos) catch continue;
+                        const entity = dimension.spawnItemEntity(drop_item_type, drop.count, spawn_pos, 10, Protocol.Vector3f.init(0, 0.25, 0)) catch continue;
                         spawned.append(network.allocator, entity) catch {};
                     }
                     break_event.entities = spawned.items;

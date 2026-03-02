@@ -31,6 +31,7 @@ pub const Player = struct {
     sent_chunks: std.AutoHashMap(i64, void),
     visible_players: std.AutoHashMap(i64, void),
     spawned: bool = false,
+    pending_dimension: ?*Dimension = null,
     opened_container: ?*Container = null,
     block_target: ?Protocol.BlockPosition = null,
     gamemode: Protocol.GameMode = .Creative,
@@ -165,20 +166,69 @@ pub const Player = struct {
     }
 
     pub fn savePlayerData(self: *Player) void {
-        const world = self.network.conduit.getWorld("world") orelse return;
-        world.provider.writePlayer(self.uuid, self) catch |err| {
+        const dimension = self.entity.dimension orelse return;
+        dimension.world.provider.writePlayer(self.uuid, self) catch |err| {
             Raknet.Logger.ERROR("Failed to save player {s}: {any}", .{ self.username, err });
         };
     }
 
     pub fn loadPlayerData(self: *Player) bool {
-        const world = self.network.conduit.getWorld("world") orelse return false;
-        return world.provider.readPlayer(self.uuid, self) catch false;
+        const dimension = self.entity.dimension orelse return false;
+        return dimension.world.provider.readPlayer(self.uuid, self) catch false;
+    }
+
+    pub fn transferToDimension(self: *Player, dimension: *Dimension) void {
+        self.savePlayerData();
+        self.network.conduit.tasks.cancelByOwner("chunk_streaming", self.entity.runtime_id, ChunkLoadingTrait.destroyStreamState);
+        self.releaseChunks();
+        if (self.entity.getTraitState(ChunkLoadingTrait.ChunkLoadingTrait)) |state| {
+            const s: *ChunkLoadingTrait.State = @ptrCast(@alignCast(state));
+            s.initialized = false;
+        }
+
+        const spawn = dimension.spawn_position;
+        const pos = Protocol.Vector3f.init(
+            @as(f32, @floatFromInt(spawn.x)) + 0.5,
+            @as(f32, @floatFromInt(spawn.y)),
+            @as(f32, @floatFromInt(spawn.z)) + 0.5,
+        );
+
+        const current_type = if (self.entity.dimension) |d| d.dimension_type else null;
+        if (current_type != null and current_type.? == dimension.dimension_type) {
+            self.entity.dimension = dimension;
+            self.entity.position = pos;
+
+            var stream = BinaryStream.init(self.entity.allocator, null, null);
+            defer stream.deinit();
+            const move = Protocol.MovePlayerPacket{
+                .runtime_id = @bitCast(self.entity.runtime_id),
+                .position = pos,
+                .pitch = 0,
+                .yaw = 0,
+                .head_yaw = 0,
+                .mode = .Teleport,
+                .on_ground = false,
+            };
+            const serialized = move.serialize(&stream) catch return;
+            self.network.sendPacket(self.connection, serialized) catch {};
+        } else {
+            self.spawned = false;
+            self.pending_dimension = dimension;
+
+            var stream = BinaryStream.init(self.entity.allocator, null, null);
+            defer stream.deinit();
+            var pkt = Protocol.ChangeDimensionPacket{
+                .dimension = dimension.dimension_type,
+                .position = pos,
+                .respawn = false,
+            };
+            const serialized = pkt.serialize(&stream) catch return;
+            self.network.sendPacket(self.connection, serialized) catch {};
+        }
     }
 
     fn releaseChunks(self: *Player) void {
-        const world = self.network.conduit.getWorld("world") orelse return;
-        const overworld = world.getDimension("overworld") orelse return;
+        const dimension = self.entity.dimension orelse return;
         const allocator = self.entity.allocator;
 
         var hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
@@ -187,7 +237,7 @@ pub const Player = struct {
             hashes.append(allocator, key.*) catch {};
         }
         self.sent_chunks.clearAndFree();
-        overworld.releaseUnrenderedChunks(hashes.items);
+        dimension.releaseUnrenderedChunks(hashes.items);
         hashes.deinit(allocator);
     }
 
@@ -255,8 +305,7 @@ pub const Player = struct {
 
         {
             const EntityTypeRegistry = @import("../entity/entity-type-registry.zig").EntityTypeRegistry;
-            const world = self.network.conduit.getWorld("world") orelse return;
-            const dimension = world.getDimension("overworld") orelse return;
+            const dimension = self.entity.dimension orelse return;
             if (EntityTypeRegistry.get("minecraft:zombie")) |zombie_type| {
                 const pos = self.entity.position;
                 _ = dimension.spawnEntity(zombie_type, Protocol.Vector3f.init(pos.x + 3, pos.y, pos.z + 3)) catch return;

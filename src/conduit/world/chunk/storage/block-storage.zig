@@ -315,7 +315,9 @@ pub const BlockStorage = struct {
 
         if (is_runtime) {
             const palette_size_encoded = try stream.readVarInt();
-            const palette_size: usize = @intCast(decodeZigZag32(palette_size_encoded));
+            const palette_size_signed = decodeZigZag32(palette_size_encoded);
+            if (palette_size_signed < 0) return error.InvalidPaletteSize;
+            const palette_size: usize = @intCast(palette_size_signed);
             for (0..palette_size) |_| {
                 const encoded = try stream.readVarInt();
                 const state = decodeZigZag32(encoded);
@@ -324,7 +326,9 @@ pub const BlockStorage = struct {
                 palette_len += 1;
             }
         } else {
-            const palette_size: usize = @intCast(try stream.readInt32(.Little));
+            const palette_size_i = try stream.readInt32(.Little);
+            if (palette_size_i < 0) return error.InvalidPaletteSize;
+            const palette_size: usize = @intCast(palette_size_i);
             for (0..palette_size) |_| {
                 const nbt_opts = NBT.ReadWriteOptions{ .name = true, .tag_type = true, .varint = false, .endian = .Little };
                 var compound = NBT.CompoundTag.read(stream, allocator, nbt_opts) catch {

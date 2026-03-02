@@ -42,10 +42,12 @@ pub fn handleResourcePack(
 
         .Completed => {
             if (network.conduit.getPlayerByConnection(connection)) |player| {
-                const loaded = player.loadPlayerData();
-
                 const world = network.conduit.getWorld("world");
                 const dimension = if (world) |w| w.getDimension("overworld") else null;
+                player.entity.dimension = dimension;
+
+                const loaded = player.loadPlayerData();
+
                 const spawn_pos = if (dimension) |dim| dim.spawn_position else Protocol.BlockPosition.init(0, 100, 0);
 
                 if (!loaded) {

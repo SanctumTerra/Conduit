@@ -27,10 +27,17 @@ const handlePlayerAction = @import("./handlers/player-action.zig").handlePlayerA
 const handleCommandRequest = @import("./handlers/command-request.zig").handleCommandRequest;
 const handleBlockPickRequest = @import("./handlers/block-pick-request.zig").handleBlockPickRequest;
 
+const QueuedPacket = struct {
+    conn: *Raknet.Connection,
+    payload: []u8,
+};
+
 pub const NetworkHandler = struct {
     conduit: *Conduit,
     allocator: std.mem.Allocator,
     options: CompressionOptions,
+    packet_queue: std.ArrayList(QueuedPacket),
+    packet_queue_mutex: std.Thread.Mutex,
 
     pub fn init(c: *Conduit) !*NetworkHandler {
         const self = try c.allocator.create(NetworkHandler);
@@ -41,6 +48,8 @@ pub const NetworkHandler = struct {
                 .compressionMethod = protocol.CompressionMethod.Zlib,
                 .compressionThreshold = 255,
             },
+            .packet_queue = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 },
+            .packet_queue_mutex = .{},
         };
         self.conduit.*.raknet.setConnectCallback(onConnect, self);
         self.conduit.*.raknet.setDisconnectCallback(onDisconnect, self);
@@ -63,9 +72,26 @@ pub const NetworkHandler = struct {
 
     pub fn onPacket(conn: *Raknet.Connection, payload: []const u8, context: ?*anyopaque) void {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
-        self.onGamePacket(conn, payload) catch |err| {
-            Raknet.Logger.ERROR("Failed to handle encapsulated {any}", .{err});
+        const copy = self.allocator.dupe(u8, payload) catch return;
+        self.packet_queue_mutex.lock();
+        defer self.packet_queue_mutex.unlock();
+        self.packet_queue.append(self.allocator, .{ .conn = conn, .payload = copy }) catch {
+            self.allocator.free(copy);
         };
+    }
+
+    pub fn drainPackets(self: *NetworkHandler) void {
+        self.packet_queue_mutex.lock();
+        var queue = self.packet_queue;
+        self.packet_queue = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 };
+        self.packet_queue_mutex.unlock();
+        defer queue.deinit(self.allocator);
+        for (queue.items) |entry| {
+            defer self.allocator.free(entry.payload);
+            self.onGamePacket(entry.conn, entry.payload) catch |err| {
+                Raknet.Logger.ERROR("Failed to handle encapsulated {any}", .{err});
+            };
+        }
     }
 
     pub fn onGamePacket(self: *NetworkHandler, conn: *Raknet.Connection, payload: []const u8) !void {
@@ -246,6 +272,8 @@ pub const NetworkHandler = struct {
     }
 
     pub fn deinit(self: *NetworkHandler) void {
+        for (self.packet_queue.items) |entry| self.allocator.free(entry.payload);
+        self.packet_queue.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 };
