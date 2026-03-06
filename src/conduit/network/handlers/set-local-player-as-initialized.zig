@@ -14,32 +14,37 @@ pub fn handleSetLocalPlayerAsInitialized(
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
     if (player.spawned) return;
     player.spawned = true;
+
     try player.onSpawn();
 
     const snapshots = network.conduit.getPlayerSnapshots();
 
-    var all_entries = std.ArrayList(Protocol.PlayerListEntry){ .items = &.{}, .capacity = 0 };
-    defer all_entries.deinit(network.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
 
     for (snapshots) |p| {
-        try all_entries.append(network.allocator, .{
+        const temp_allocator = arena.allocator();
+
+        const entry = [_]Protocol.PlayerListEntry{.{
             .uuid = p.uuid,
             .entityUniqueId = p.entity.runtime_id,
             .username = p.username,
             .xuid = p.xuid,
             .skin = &p.loginData.client_data,
             .buildPlatform = @intCast(p.loginData.client_data.device_os),
-        });
-    }
+        }};
 
-    var full_stream = BinaryStream.init(network.allocator, null, null);
-    defer full_stream.deinit();
-    var full_packet = Protocol.PlayerListPacket{
-        .action = .Add,
-        .entries = all_entries.items,
-    };
-    const full_serialized = try full_packet.serialize(&full_stream, network.allocator);
-    try network.sendPacket(connection, full_serialized);
+        var stream = BinaryStream.init(temp_allocator, null, null);
+        defer stream.deinit();
+        var packet = Protocol.PlayerListPacket{
+            .action = .Add,
+            .entries = &entry,
+        };
+        const serialized = try packet.serialize(&stream, temp_allocator);
+        try network.sendPacket(connection, serialized);
+
+        _ = arena.reset(.retain_capacity);
+    }
 
     const new_entry = [_]Protocol.PlayerListEntry{.{
         .uuid = player.uuid,
@@ -50,13 +55,14 @@ pub fn handleSetLocalPlayerAsInitialized(
         .buildPlatform = @intCast(player.loginData.client_data.device_os),
     }};
 
-    var new_stream = BinaryStream.init(network.allocator, null, null);
+    const temp_allocator = arena.allocator();
+    var new_stream = BinaryStream.init(temp_allocator, null, null);
     defer new_stream.deinit();
     var new_packet = Protocol.PlayerListPacket{
         .action = .Add,
         .entries = &new_entry,
     };
-    const new_serialized = try new_packet.serialize(&new_stream, network.allocator);
+    const new_serialized = try new_packet.serialize(&new_stream, temp_allocator);
 
     for (snapshots) |other| {
         if (other.entity.runtime_id == player.entity.runtime_id) continue;

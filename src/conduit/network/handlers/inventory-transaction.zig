@@ -88,6 +88,15 @@ fn handleUseItem(
                 return;
             }
         } else {
+            if (dimension.getChunk(data.blockPosition.x >> 4, data.blockPosition.z >> 4)) |chunk| {
+                dimension.world.provider.readBlockEntities(chunk, dimension) catch {};
+                if (dimension.getBlockPtr(data.blockPosition)) |loaded_block| {
+                    if (!loaded_block.fireEvent(.Interact, .{ loaded_block, player })) {
+                        return;
+                    }
+                }
+            }
+
             var temp_block = dimension.getBlock(data.blockPosition);
             applyTraitsFromRegistry(player.entity.allocator, &temp_block) catch {};
             if (temp_block.traits.items.len > 0) {

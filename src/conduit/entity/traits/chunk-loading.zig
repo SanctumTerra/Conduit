@@ -200,9 +200,12 @@ pub fn queueChunkStreaming(player: *Player) !void {
     const center_x = @as(i32, @intFromFloat(@floor(player.entity.position.x))) >> 4;
     const center_z = @as(i32, @intFromFloat(@floor(player.entity.position.z))) >> 4;
     const radius = player.view_distance;
+    const sim_dist = dimension.simulation_distance;
 
     var stale_hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
     defer stale_hashes.deinit(allocator);
+    var upgrade_hashes = std.ArrayList(i64){ .items = &.{}, .capacity = 0 };
+    defer upgrade_hashes.deinit(allocator);
 
     var it = player.sent_chunks.keyIterator();
     while (it.next()) |key| {
@@ -211,10 +214,20 @@ pub fn queueChunkStreaming(player: *Player) !void {
         const dz = coords.z - center_z;
         if (dx * dx + dz * dz > radius * radius) {
             stale_hashes.append(allocator, key.*) catch {};
+            continue;
+        }
+
+        if (dx * dx + dz * dz <= sim_dist * sim_dist and dimension.getChunk(coords.x, coords.z) == null) {
+            // This chunk was previously sent as render-only data. Once it enters
+            // simulation range, force a full reload so block entities exist again.
+            upgrade_hashes.append(allocator, key.*) catch {};
         }
     }
 
     for (stale_hashes.items) |h| {
+        _ = player.sent_chunks.remove(h);
+    }
+    for (upgrade_hashes.items) |h| {
         _ = player.sent_chunks.remove(h);
     }
 
@@ -582,20 +595,20 @@ fn onBatchComplete(ctx: *anyopaque) void {
                 const dz = chunk.z - work.center_z;
                 if (dx * dx + dz * dz <= sim_dist * sim_dist) {
                     const hash = @import("../../world/dimension/dimension.zig").chunkHash(chunk.x, chunk.z);
-                    const result = dim.chunks.fetchPut(hash, chunk) catch {
+                    if (dim.chunks.get(hash) != null) {
+                        var c = chunk;
+                        c.deinit();
+                        allocator.destroy(c);
+                        work.chunks[i] = null;
+                        continue;
+                    }
+                    dim.chunks.put(hash, chunk) catch {
                         var c = chunk;
                         c.deinit();
                         allocator.destroy(c);
                         work.chunks[i] = null;
                         continue;
                     };
-                    if (result) |old| {
-                        dim.removeBlocksInChunk(chunk.x, chunk.z);
-                        dim.world.provider.uncacheChunk(chunk.x, chunk.z, dim);
-                        var old_chunk = old.value;
-                        old_chunk.deinit();
-                        allocator.destroy(old_chunk);
-                    }
                 } else {
                     var c = chunk;
                     c.deinit();
@@ -656,6 +669,12 @@ fn onBatchComplete(ctx: *anyopaque) void {
 }
 
 fn applyParsedBlockData(allocator: std.mem.Allocator, dim: *Dimension, data: *ChunkBlockData) void {
+    // Two-pass approach: first create & store all blocks (so double chest pairing
+    // can resize containers to 54 slots), then deserialize items in a second pass.
+    // This prevents items in slots 27-53 from being dropped when the parent chest
+    // is loaded before the child.
+
+    // Pass 1: Create blocks, add traits, store in dimension (pairing happens here)
     for (data.parsed_entities) |entity| {
         const pos = Protocol.BlockPosition{ .x = entity.x, .y = entity.y, .z = entity.z };
         if (dim.getBlockPtr(pos) != null) continue;
@@ -681,13 +700,19 @@ fn applyParsedBlockData(allocator: std.mem.Allocator, dim: *Dimension, data: *Ch
             allocator.destroy(block);
             continue;
         };
+    }
 
-        if (entity.nbt_data) |nbt_bytes| {
-            var stream = @import("BinaryStream").BinaryStream.init(allocator, nbt_bytes, null);
-            var tag = NBT.CompoundTag.read(&stream, allocator, NBT.ReadWriteOptions.default) catch continue;
-            defer tag.deinit(allocator);
-            block.fireEvent(.Deserialize, .{&tag});
-        }
+    // Pass 2: Deserialize block entity data (items, etc.) now that all blocks
+    // are stored and pairing has set correct container sizes
+    for (data.parsed_entities) |entity| {
+        const nbt_bytes = entity.nbt_data orelse continue;
+        const pos = Protocol.BlockPosition{ .x = entity.x, .y = entity.y, .z = entity.z };
+        const block = dim.getBlockPtr(pos) orelse continue;
+
+        var stream = @import("BinaryStream").BinaryStream.init(allocator, nbt_bytes, null);
+        var tag = NBT.CompoundTag.read(&stream, allocator, NBT.ReadWriteOptions.default) catch continue;
+        defer tag.deinit(allocator);
+        block.fireEvent(.Deserialize, .{&tag});
     }
 
     for (data.trait_positions) |tp| {
@@ -826,6 +851,7 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
     };
 
     const dimension = state.dimension;
+    const sim_dist = dimension.simulation_distance;
 
     while (state.inflight < MAX_INFLIGHT_BATCHES and state.ring <= state.radius) {
         var coord_buf: [BATCH_SIZE]ChunkCoord = undefined;
@@ -841,10 +867,14 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
                 state.ring_idx = 0;
                 const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = state.center_x, .z = state.center_z });
                 if (!player.sent_chunks.contains(chunk_hash)) {
-                    if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
-                        player.connection.sendReliableMessage(cached, .Normal);
-                        player.sent_chunks.put(chunk_hash, {}) catch {};
-                    } else {
+                    if (sim_dist <= 0) {
+                        if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
+                            player.connection.sendReliableMessage(cached, .Normal);
+                            player.sent_chunks.put(chunk_hash, {}) catch {};
+                            continue;
+                        }
+                    }
+                    {
                         coord_buf[count] = .{ .x = state.center_x, .z = state.center_z };
                         hash_buf[count] = chunk_hash;
                         count += 1;
@@ -870,10 +900,13 @@ fn chunkStreamStep(ctx: *anyopaque) bool {
             const chunk_hash = Protocol.ChunkCoords.hash(.{ .x = coords[0], .z = coords[1] });
             if (player.sent_chunks.contains(chunk_hash)) continue;
 
-            if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
-                player.connection.sendReliableMessage(cached, .Normal);
-                player.sent_chunks.put(chunk_hash, {}) catch {};
-                continue;
+            const in_simulation = dx * dx + dz * dz <= sim_dist * sim_dist;
+            if (!in_simulation) {
+                if (dimension.getCachedChunkPacket(chunk_hash)) |cached| {
+                    player.connection.sendReliableMessage(cached, .Normal);
+                    player.sent_chunks.put(chunk_hash, {}) catch {};
+                    continue;
+                }
             }
 
             coord_buf[count] = .{ .x = coords[0], .z = coords[1] };

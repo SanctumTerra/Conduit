@@ -135,7 +135,7 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(zlib_dep.artifact("z"));
     exe.linkLibrary(leveldb_lib);
     exe.linkLibCpp();
-
+    // exe.root_module.strip = true;
     b.installArtifact(exe);
 
     const run_step = b.step("run", "Run the app");

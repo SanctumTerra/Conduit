@@ -1,5 +1,32 @@
 const std = @import("std");
 
+fn jsonTypeName(value: std.json.Value) []const u8 {
+    return switch (value) {
+        .null => "null",
+        .bool => "bool",
+        .integer => "integer",
+        .float => "float",
+        .number_string => "number_string",
+        .string => "string",
+        .array => "array",
+        .object => "object",
+    };
+}
+
+fn dupRequiredString(allocator: std.mem.Allocator, object: std.json.ObjectMap, key: []const u8) ![]const u8 {
+    const value = object.get(key) orelse {
+        std.log.err("Login field '{s}' is missing", .{key});
+        return error.MissingRequiredLoginField;
+    };
+    return switch (value) {
+        .string => |s| try allocator.dupe(u8, s),
+        else => {
+            std.log.err("Login field '{s}' expected string, got {s}", .{ key, jsonTypeName(value) });
+            return error.InvalidRequiredLoginField;
+        },
+    };
+}
+
 pub const IdentityData = struct {
     xuid: []const u8,
     display_name: []const u8,
@@ -10,19 +37,19 @@ pub const IdentityData = struct {
     pub fn parse(allocator: std.mem.Allocator, json_value: std.json.Value) !IdentityData {
         const extra_data = json_value.object.get("extraData") orelse return error.MissingExtraData;
 
-        const xuid = if (extra_data.object.get("XUID")) |x| try allocator.dupe(u8, x.string) else "";
+        const xuid = try dupRequiredString(allocator, extra_data.object, "XUID");
         errdefer if (xuid.len > 0) allocator.free(xuid);
 
-        const display_name = if (extra_data.object.get("displayName")) |n| try allocator.dupe(u8, n.string) else "";
+        const display_name = try dupRequiredString(allocator, extra_data.object, "displayName");
         errdefer if (display_name.len > 0) allocator.free(display_name);
 
-        const identity = if (extra_data.object.get("identity")) |i| try allocator.dupe(u8, i.string) else "";
+        const identity = try dupRequiredString(allocator, extra_data.object, "identity");
         errdefer if (identity.len > 0) allocator.free(identity);
 
-        const sandbox_id = if (extra_data.object.get("sandboxId")) |s| try allocator.dupe(u8, s.string) else "";
+        const sandbox_id = try dupRequiredString(allocator, extra_data.object, "sandboxId");
         errdefer if (sandbox_id.len > 0) allocator.free(sandbox_id);
 
-        const title_id = if (extra_data.object.get("titleId")) |t| try allocator.dupe(u8, t.string) else "";
+        const title_id = try dupRequiredString(allocator, extra_data.object, "titleId");
         errdefer if (title_id.len > 0) allocator.free(title_id);
 
         return IdentityData{
@@ -113,10 +140,14 @@ pub const ClientData = struct {
 
         const getString = struct {
             fn get(o: std.json.ObjectMap, key: []const u8, alloc: std.mem.Allocator) ![]const u8 {
-                if (o.get(key)) |v| {
-                    return try alloc.dupe(u8, v.string);
-                }
-                return "";
+                const value = o.get(key) orelse return "";
+                return switch (value) {
+                    .string => |s| try alloc.dupe(u8, s),
+                    else => {
+                        std.log.warn("Login field '{s}' expected string, got {s}", .{ key, jsonTypeName(value) });
+                        return "";
+                    },
+                };
             }
         }.get;
 

@@ -73,7 +73,11 @@ pub const LevelDBProvider = struct {
         }
 
         const hash = chunkHash(x, z);
-        if (gop.value_ptr.get(hash)) |c| return c;
+        if (gop.value_ptr.get(hash)) |_| {
+            // The dimension is the owner of live chunk pointers. If it no longer has
+            // this chunk loaded, any provider-side cached pointer is stale.
+            _ = gop.value_ptr.remove(hash);
+        }
 
         const dim_index = dimensionIndex(dimension);
         const ver_key = versionKey(x, z, dim_index);
@@ -336,7 +340,12 @@ pub const LevelDBProvider = struct {
         defer stream.deinit();
         for (tags.items) |*t| {
             switch (t.*) {
-                .Compound => |*c| CompoundTag.write(&stream, c, ReadWriteOptions.default) catch continue,
+                .Compound => |*c| {
+                    CompoundTag.write(&stream, c, ReadWriteOptions.default) catch |err| {
+                        std.log.err("Failed to write block entity NBT: {}", .{err});
+                        continue;
+                    };
+                },
                 else => {},
             }
         }
@@ -352,31 +361,70 @@ pub const LevelDBProvider = struct {
         };
         defer LevelDB.DB.freeValue(data);
 
+        // Two-pass approach: first create & store all blocks (so double chest pairing
+        // can resize containers to 54 slots), then deserialize items in a second pass.
+
+        // Collect NBT tags for pass 2
+        const PendingEntity = struct {
+            pos: Protocol.BlockPosition,
+            tag_data: []const u8,
+        };
+        var pending = std.ArrayList(PendingEntity){ .items = &.{}, .capacity = 0 };
+        defer {
+            for (pending.items) |p| self.allocator.free(p.tag_data);
+            pending.deinit(self.allocator);
+        }
+
+        // Pass 1: Create blocks, add traits, store in dimension (pairing happens here)
         var stream = BinaryStream.init(self.allocator, data, null);
         while (stream.offset < data.len) {
             var tag = CompoundTag.read(&stream, self.allocator, ReadWriteOptions.default) catch break;
-            defer tag.deinit(self.allocator);
 
-            const x = switch (tag.get("x") orelse continue) {
+            const x = switch (tag.get("x") orelse {
+                tag.deinit(self.allocator);
+                continue;
+            }) {
                 .Int => |t| t.value,
-                else => continue,
+                else => {
+                    tag.deinit(self.allocator);
+                    continue;
+                },
             };
-            const y = switch (tag.get("y") orelse continue) {
+            const y = switch (tag.get("y") orelse {
+                tag.deinit(self.allocator);
+                continue;
+            }) {
                 .Int => |t| t.value,
-                else => continue,
+                else => {
+                    tag.deinit(self.allocator);
+                    continue;
+                },
             };
-            const z = switch (tag.get("z") orelse continue) {
+            const z = switch (tag.get("z") orelse {
+                tag.deinit(self.allocator);
+                continue;
+            }) {
                 .Int => |t| t.value,
-                else => continue,
+                else => {
+                    tag.deinit(self.allocator);
+                    continue;
+                },
             };
 
             const pos = Protocol.BlockPosition{ .x = x, .y = y, .z = z };
-            if (dimension.getBlockPtr(pos) != null) continue;
+            if (dimension.getBlockPtr(pos) != null) {
+                tag.deinit(self.allocator);
+                continue;
+            }
 
-            const block = self.allocator.create(Block) catch continue;
+            const block = self.allocator.create(Block) catch {
+                tag.deinit(self.allocator);
+                continue;
+            };
             block.* = Block.init(self.allocator, dimension, pos);
 
             const traits_tag = tag.get("traits") orelse tag.get("Traits");
+            var added_traits = false;
             if (traits_tag) |tt| {
                 switch (tt) {
                     .List => |list| {
@@ -386,6 +434,7 @@ pub const LevelDBProvider = struct {
                                     if (trait_mod.getTraitFactory(s.value)) |f| {
                                         const instance = f(self.allocator) catch continue;
                                         block.addTrait(instance) catch continue;
+                                        added_traits = true;
                                     }
                                 },
                                 else => {},
@@ -396,19 +445,72 @@ pub const LevelDBProvider = struct {
                 }
             }
 
+            if (!added_traits) {
+                const id_tag = tag.get("id");
+                if (id_tag) |idt| {
+                    switch (idt) {
+                        .String => |s| {
+                            const inferred: ?[]const u8 = if (std.mem.eql(u8, s.value, "Chest")) "chest" else if (std.mem.eql(u8, s.value, "TrappedChest")) "chest" else if (std.mem.eql(u8, s.value, "Barrel")) "barrel" else null;
+                            if (inferred) |trait_id| {
+                                if (trait_mod.getTraitFactory(trait_id)) |f| {
+                                    if (f(self.allocator)) |instance| {
+                                        block.addTrait(instance) catch {};
+                                    } else |_| {}
+                                }
+                            }
+                        },
+                        else => {},
+                    }
+                }
+            }
+
             if (block.traits.items.len == 0) {
                 block.deinit();
                 self.allocator.destroy(block);
+                tag.deinit(self.allocator);
                 continue;
             }
+
+            // Serialize the tag to bytes for pass 2, then free the tag
+            var nbt_stream = BinaryStream.init(self.allocator, null, null);
+            CompoundTag.write(&nbt_stream, &tag, ReadWriteOptions.default) catch {
+                nbt_stream.deinit();
+                block.deinit();
+                self.allocator.destroy(block);
+                tag.deinit(self.allocator);
+                continue;
+            };
+            const tag_data = self.allocator.dupe(u8, nbt_stream.getBuffer()) catch {
+                nbt_stream.deinit();
+                block.deinit();
+                self.allocator.destroy(block);
+                tag.deinit(self.allocator);
+                continue;
+            };
+            nbt_stream.deinit();
+            tag.deinit(self.allocator);
 
             dimension.storeBlock(block) catch {
                 block.deinit();
                 self.allocator.destroy(block);
+                self.allocator.free(tag_data);
                 continue;
             };
 
-            block.fireEvent(.Deserialize, .{&tag});
+            pending.append(self.allocator, .{ .pos = pos, .tag_data = tag_data }) catch {
+                self.allocator.free(tag_data);
+                continue;
+            };
+        }
+
+        // Pass 2: Deserialize block entity data (items, etc.) now that all blocks
+        // are stored and pairing has set correct container sizes
+        for (pending.items) |p| {
+            const block = dimension.getBlockPtr(p.pos) orelse continue;
+            var deser_stream = BinaryStream.init(self.allocator, p.tag_data, null);
+            var deser_tag = CompoundTag.read(&deser_stream, self.allocator, ReadWriteOptions.default) catch continue;
+            defer deser_tag.deinit(self.allocator);
+            block.fireEvent(.Deserialize, .{&deser_tag});
         }
 
         self.scanChunkForTraitBlocks(chunk, dimension);

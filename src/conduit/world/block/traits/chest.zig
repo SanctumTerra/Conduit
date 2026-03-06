@@ -7,12 +7,22 @@ const BlockContainer = @import("../../../container/block-container.zig").BlockCo
 const CompoundTag = @import("nbt").CompoundTag;
 const trait_mod = @import("./trait.zig");
 const serialization = @import("../../provider/serialization.zig");
+const Logger = @import("Raknet").Logger;
 
 pub const State = struct {
     container: ?BlockContainer = null,
     pair_position: ?Protocol.BlockPosition = null,
     is_parent: bool = false,
 };
+
+fn resolvedPairPosition(state: *State, block: *Block) ?Protocol.BlockPosition {
+    const pair = state.pair_position orelse return null;
+    return .{
+        .x = pair.x,
+        .y = block.position.y,
+        .z = pair.z,
+    };
+}
 
 fn onAttach(state: *State, block: *Block) void {
     if (state.container == null) {
@@ -39,12 +49,79 @@ fn onSerialize(state: *State, tag: *CompoundTag) void {
 
 fn onDeserialize(state: *State, tag: *const CompoundTag) void {
     const container = &(state.container orelse return);
-    const items_tag = tag.get("Items") orelse return;
-    switch (items_tag) {
-        .List => |list| {
-            serialization.deserializeContainer(container.base.allocator, &container.base, &list);
-        },
-        else => {},
+    if (tag.get("Items")) |items_tag| {
+        switch (items_tag) {
+            .List => |list| {
+                serialization.deserializeContainer(container.base.allocator, &container.base, &list);
+            },
+            else => {},
+        }
+    }
+
+    const pair_x = switch (tag.get("pairx") orelse return) {
+        .Int => |v| v.value,
+        else => return,
+    };
+    const pair_z = switch (tag.get("pairz") orelse return) {
+        .Int => |v| v.value,
+        else => return,
+    };
+    state.pair_position = .{
+        .x = pair_x,
+        .y = 0,
+        .z = pair_z,
+    };
+    if (tag.get("pairlead")) |pair_lead| {
+        switch (pair_lead) {
+            .Byte => |v| state.is_parent = v.value != 0,
+            else => {},
+        }
+    }
+}
+
+fn ensurePairLink(state: *State, block: *Block) void {
+    const pair_pos = resolvedPairPosition(state, block) orelse {
+        tryPairAdjacent(state, block);
+        return;
+    };
+
+    const paired_block = block.dimension.getBlockPtr(pair_pos) orelse return;
+    const paired_state = paired_block.getTraitState(ChestTrait) orelse return;
+
+    if (state.is_parent) {
+        if (state.container) |*parent_container| {
+            if (parent_container.base.getSize() != 54) {
+                parent_container.base.setSize(54) catch return;
+            }
+            if (paired_state.container) |*child_container| {
+                var slot: u32 = 0;
+                while (slot < 27) : (slot += 1) {
+                    if (child_container.base.storage[slot]) |item| {
+                        parent_container.base.storage[slot + 27] = item;
+                        child_container.base.storage[slot] = null;
+                    }
+                }
+            }
+        }
+        paired_state.pair_position = block.position;
+        paired_state.is_parent = false;
+    } else {
+        if (paired_state.container) |*parent_container| {
+            if (parent_container.base.getSize() != 54) {
+                parent_container.base.setSize(54) catch return;
+            }
+            if (state.container) |*child_container| {
+                var slot: u32 = 0;
+                while (slot < 27) : (slot += 1) {
+                    if (child_container.base.storage[slot]) |item| {
+                        parent_container.base.storage[slot + 27] = item;
+                        child_container.base.storage[slot] = null;
+                    }
+                }
+            }
+        }
+        paired_state.pair_position = block.position;
+        paired_state.is_parent = true;
     }
 }
 
@@ -83,8 +160,11 @@ fn sendActorData(block: *Block, player: *Player) void {
 }
 
 fn onInteract(state: *State, block: *Block, player: *Player) bool {
+    ensurePairLink(state, block);
+
     if (state.pair_position != null and !state.is_parent) {
-        const parent_block = block.dimension.getBlockPtr(state.pair_position.?) orelse return true;
+        const parent_pos = resolvedPairPosition(state, block) orelse return true;
+        const parent_block = block.dimension.getBlockPtr(parent_pos) orelse return true;
         const parent_state = parent_block.getTraitState(ChestTrait) orelse return true;
         return onInteract(parent_state, parent_block, player);
     }
@@ -94,14 +174,14 @@ fn onInteract(state: *State, block: *Block, player: *Player) bool {
     _ = container.show(player, block.position);
     sendBlockEvent(block, 1);
     sendSound(block, .ChestOpen);
-    if (state.pair_position) |pair_pos| {
+    if (resolvedPairPosition(state, block)) |pair_pos| {
         sendBlockEventAt(block, pair_pos, 1);
     }
     return false;
 }
 
 fn onBreak(state: *State, block: *Block, _: ?*Player) bool {
-    if (state.pair_position) |pair_pos| {
+    if (resolvedPairPosition(state, block)) |pair_pos| {
         if (state.is_parent) {
             if (state.container) |*container| {
                 var iter = container.base.occupants.iterator();
@@ -178,7 +258,13 @@ fn tryPairAdjacent(state: *State, block: *Block) void {
                 break :blk .{ .{ 0, -1 }, .{ 0, 1 } };
             }
         },
-        else => return,
+        else => {
+            Logger.ERROR(
+                "ChestTrait expected minecraft:cardinal_direction to be string, got '{s}' at ({d},{d},{d}) for {s}",
+                .{ @tagName(direction), block.position.x, block.position.y, block.position.z, block.getIdentifier() },
+            );
+            return;
+        },
     };
 
     for (offsets) |off| {
@@ -195,6 +281,13 @@ fn tryPairAdjacent(state: *State, block: *Block) void {
 
         const adj_perm = adj_block.getPermutation(0) catch continue;
         const adj_dir = adj_perm.state.get("minecraft:cardinal_direction") orelse continue;
+        if (adj_dir != .string) {
+            Logger.ERROR(
+                "ChestTrait adjacent minecraft:cardinal_direction was '{s}' at ({d},{d},{d}) for {s}",
+                .{ @tagName(adj_dir), adj_pos.x, adj_pos.y, adj_pos.z, adj_block.getIdentifier() },
+            );
+            continue;
+        }
         if (!direction.eql(adj_dir)) break;
 
         state.pair_position = adj_pos;

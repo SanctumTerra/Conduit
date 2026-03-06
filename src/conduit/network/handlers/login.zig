@@ -43,7 +43,17 @@ pub fn handleLogin(
         return;
     }
 
-    var data = try Protocol.Login.Decoder.decodeLoginChain(network.allocator, login.identity, login.client);
+    var data = Protocol.Login.Decoder.decodeLoginChain(network.allocator, login.identity, login.client) catch {
+        var str = BinaryStream.init(network.allocator, null, null);
+        defer str.deinit();
+        var status = Protocol.PlayStatusPacket{
+            .status = .FailedClient,
+        };
+        if (status.serialize(&str)) |ser| {
+            network.sendPacket(connection, ser) catch {};
+        } else |_| {}
+        return;
+    };
     errdefer {
         data.deinit();
 

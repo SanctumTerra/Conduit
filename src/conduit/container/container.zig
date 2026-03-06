@@ -265,7 +265,7 @@ pub const Container = struct {
         return self.occupants;
     }
 
-    fn getNextContainerId() Protocol.ContainerId {
+    pub fn getNextContainerId() Protocol.ContainerId {
         const id: Protocol.ContainerId = @enumFromInt(nextContainerId);
         nextContainerId += 1;
         if (nextContainerId > @intFromEnum(Protocol.ContainerId.Last)) {

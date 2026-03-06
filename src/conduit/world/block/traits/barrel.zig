@@ -53,6 +53,7 @@ fn sendActorData(block: *Block, player: *Player) void {
     tag.set("x", .{ .Int = NBT.IntTag.init(block.position.x, null) }) catch return;
     tag.set("y", .{ .Int = NBT.IntTag.init(block.position.y, null) }) catch return;
     tag.set("z", .{ .Int = NBT.IntTag.init(block.position.z, null) }) catch return;
+    block.fireEvent(.Serialize, .{&tag});
     var s = BinaryStream.init(block.allocator, null, null);
     defer s.deinit();
     const pkt = Protocol.BlockActorDataPacket{ .position = block.position, .nbt = tag };
