@@ -16,6 +16,7 @@ const WorldProvider = @import("../../world/provider/world-provider.zig").WorldPr
 const NBT = @import("nbt");
 const Block = @import("../../world/block/block.zig").Block;
 const BlockPermutation = @import("../../world/block/block-permutation.zig").BlockPermutation;
+const ChestTrait = @import("../../world/block/traits/chest.zig");
 const trait_mod = @import("../../world/block/traits/trait.zig");
 const chunk_mod = @import("../../world/chunk/chunk.zig");
 
@@ -23,7 +24,10 @@ pub const State = struct {
     last_chunk_x: i32,
     last_chunk_z: i32,
     initialized: bool,
+    visibility_tick: u8,
 };
+
+pub const VISIBILITY_UPDATE_INTERVAL: u8 = 4;
 
 fn getPlayer(entity: *Entity) ?*Player {
     if (!std.mem.eql(u8, entity.entity_type.identifier, "minecraft:player")) return null;
@@ -36,10 +40,14 @@ fn onTick(state: *State, entity: *Entity) void {
 
     const cx = @as(i32, @intFromFloat(@floor(entity.position.x))) >> 4;
     const cz = @as(i32, @intFromFloat(@floor(entity.position.z))) >> 4;
+    const moved_chunks = !state.initialized or cx != state.last_chunk_x or cz != state.last_chunk_z;
 
-    updatePlayerVisibility(player);
+    state.visibility_tick +%= 1;
+    if (moved_chunks or state.visibility_tick == 0) {
+        updatePlayerVisibility(player);
+    }
 
-    if (state.initialized and cx == state.last_chunk_x and cz == state.last_chunk_z) return;
+    if (!moved_chunks) return;
 
     state.last_chunk_x = cx;
     state.last_chunk_z = cz;
@@ -331,13 +339,7 @@ fn workerLoadAndCompress(ctx: *anyopaque) void {
 
         work.chunks[i] = chunk;
 
-        const dx = coord.x - work.center_x;
-        const dz = coord.z - work.center_z;
-        const in_simulation = dx * dx + dz * dz <= work.sim_distance * work.sim_distance;
-
-        if (in_simulation) {
-            work.block_data[i] = workerReadBlockData(arena_alloc, work.provider, chunk, work.dim_type);
-        }
+        work.block_data[i] = workerReadBlockData(arena_alloc, work.provider, chunk, work.dim_type);
 
         const pkt = serializeChunkPacket(allocator, chunk, coord.x, coord.z, work.dim_type) orelse {
             work.packets[i] = &.{};
@@ -650,18 +652,8 @@ fn onBatchComplete(ctx: *anyopaque) void {
             }
         }
 
-        var sim_coords_buf: [BATCH_SIZE]ChunkCoord = undefined;
-        var sim_count: usize = 0;
-        for (0..work.count) |i| {
-            const dx = work.coords[i].x - work.center_x;
-            const dz = work.coords[i].z - work.center_z;
-            if (dx * dx + dz * dz <= sim_dist * sim_dist) {
-                sim_coords_buf[sim_count] = work.coords[i];
-                sim_count += 1;
-            }
-        }
-        if (sim_count > 0) {
-            sendBlockActorData(allocator, player, dim, sim_coords_buf[0..sim_count]);
+        if (work.count > 0) {
+            sendParsedBlockActorData(allocator, player, work.block_data);
         }
     }
     t1 = std.time.nanoTimestamp();
@@ -669,12 +661,6 @@ fn onBatchComplete(ctx: *anyopaque) void {
 }
 
 fn applyParsedBlockData(allocator: std.mem.Allocator, dim: *Dimension, data: *ChunkBlockData) void {
-    // Two-pass approach: first create & store all blocks (so double chest pairing
-    // can resize containers to 54 slots), then deserialize items in a second pass.
-    // This prevents items in slots 27-53 from being dropped when the parent chest
-    // is loaded before the child.
-
-    // Pass 1: Create blocks, add traits, store in dimension (pairing happens here)
     for (data.parsed_entities) |entity| {
         const pos = Protocol.BlockPosition{ .x = entity.x, .y = entity.y, .z = entity.z };
         if (dim.getBlockPtr(pos) != null) continue;
@@ -702,8 +688,14 @@ fn applyParsedBlockData(allocator: std.mem.Allocator, dim: *Dimension, data: *Ch
         };
     }
 
-    // Pass 2: Deserialize block entity data (items, etc.) now that all blocks
-    // are stored and pairing has set correct container sizes
+    for (data.parsed_entities) |entity| {
+        const pos = Protocol.BlockPosition{ .x = entity.x, .y = entity.y, .z = entity.z };
+        const block = dim.getBlockPtr(pos) orelse continue;
+        if (block.hasTrait(ChestTrait.ChestTrait.identifier)) {
+            ChestTrait.restoreAdjacentPairing(block);
+        }
+    }
+
     for (data.parsed_entities) |entity| {
         const nbt_bytes = entity.nbt_data orelse continue;
         const pos = Protocol.BlockPosition{ .x = entity.x, .y = entity.y, .z = entity.z };
@@ -733,56 +725,28 @@ fn blockEntityTypeId(block_identifier: []const u8) []const u8 {
     return block_identifier;
 }
 
-fn sendBlockActorData(allocator: std.mem.Allocator, player: *Player, dim: *Dimension, batch_coords: []const ChunkCoord) void {
-    for (batch_coords) |coord| {
-        const chunk_blocks = dim.getBlocksInChunk(coord.x, coord.z);
-        for (chunk_blocks) |block| {
-            if (block.traits.items.len == 0) continue;
-
-            var has_serialize = false;
-            for (block.traits.items) |inst| {
-                if (inst.vtable.onSerialize != null) {
-                    has_serialize = true;
-                    break;
-                }
-            }
-            if (!has_serialize) continue;
-
-            var tag = NBT.CompoundTag.init(allocator, null);
+fn sendParsedBlockActorData(allocator: std.mem.Allocator, player: *Player, block_data: []const ChunkBlockData) void {
+    for (block_data) |data| {
+        for (data.parsed_entities) |entity| {
+            const nbt_bytes = entity.nbt_data orelse continue;
+            var stream = BinaryStream.init(allocator, nbt_bytes, null);
+            var tag = NBT.CompoundTag.read(&stream, allocator, NBT.ReadWriteOptions.default) catch continue;
             defer tag.deinit(allocator);
 
-            const id_str = allocator.dupe(u8, blockEntityTypeId(block.getIdentifier())) catch continue;
-            tag.set("id", .{ .String = NBT.StringTag.init(id_str, null) }) catch continue;
-            tag.set("x", .{ .Int = NBT.IntTag.init(block.position.x, null) }) catch continue;
-            tag.set("y", .{ .Int = NBT.IntTag.init(block.position.y, null) }) catch continue;
-            tag.set("z", .{ .Int = NBT.IntTag.init(block.position.z, null) }) catch continue;
-
-            block.fireEvent(.Serialize, .{&tag});
+            const position = Protocol.BlockPosition{
+                .x = entity.x,
+                .y = entity.y,
+                .z = entity.z,
+            };
 
             var s = BinaryStream.init(allocator, null, null);
             defer s.deinit();
             const pkt = Protocol.BlockActorDataPacket{
-                .position = block.position,
+                .position = position,
                 .nbt = tag,
             };
             const serialized = pkt.serialize(&s, allocator) catch continue;
             player.network.sendPacket(player.connection, serialized) catch {};
-            {
-                var s2 = BinaryStream.init(allocator, null, null);
-                defer s2.deinit();
-                const fix_air = Protocol.UpdateBlockPacket{ .position = block.position, .networkBlockId = 0 };
-                const air_ser = fix_air.serialize(&s2) catch continue;
-                player.network.sendPacket(player.connection, air_ser) catch {};
-            }
-            {
-                const perm = block.getPermutation(0) catch continue;
-                const real_id: u32 = @bitCast(perm.network_id);
-                var s3 = BinaryStream.init(allocator, null, null);
-                defer s3.deinit();
-                const fix_real = Protocol.UpdateBlockPacket{ .position = block.position, .networkBlockId = real_id };
-                const real_ser = fix_real.serialize(&s3) catch continue;
-                player.network.sendPacket(player.connection, real_ser) catch {};
-            }
         }
     }
 }

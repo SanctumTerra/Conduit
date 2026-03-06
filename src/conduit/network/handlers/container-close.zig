@@ -66,7 +66,11 @@ fn trySendBlockClose(player: *@import("../../player/player.zig").Player, network
 
     sendCloseAt(network, block, position);
     if (state.pair_position) |pair_pos| {
-        sendCloseAt(network, block, pair_pos);
+        sendCloseAt(network, block, .{
+            .x = pair_pos.x,
+            .y = position.y,
+            .z = pair_pos.z,
+        });
     }
 }
 

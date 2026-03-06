@@ -24,6 +24,7 @@ const TAG_BLOCK_ENTITY: u8 = 49;
 const trait_mod = @import("../block/traits/trait.zig");
 const Block = @import("../block/block.zig").Block;
 const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const ChestTrait = @import("../block/traits/chest.zig");
 
 pub const ChunkColumnData = struct {
     has_version: bool = false,
@@ -361,10 +362,6 @@ pub const LevelDBProvider = struct {
         };
         defer LevelDB.DB.freeValue(data);
 
-        // Two-pass approach: first create & store all blocks (so double chest pairing
-        // can resize containers to 54 slots), then deserialize items in a second pass.
-
-        // Collect NBT tags for pass 2
         const PendingEntity = struct {
             pos: Protocol.BlockPosition,
             tag_data: []const u8,
@@ -375,7 +372,6 @@ pub const LevelDBProvider = struct {
             pending.deinit(self.allocator);
         }
 
-        // Pass 1: Create blocks, add traits, store in dimension (pairing happens here)
         var stream = BinaryStream.init(self.allocator, data, null);
         while (stream.offset < data.len) {
             var tag = CompoundTag.read(&stream, self.allocator, ReadWriteOptions.default) catch break;
@@ -471,7 +467,6 @@ pub const LevelDBProvider = struct {
                 continue;
             }
 
-            // Serialize the tag to bytes for pass 2, then free the tag
             var nbt_stream = BinaryStream.init(self.allocator, null, null);
             CompoundTag.write(&nbt_stream, &tag, ReadWriteOptions.default) catch {
                 nbt_stream.deinit();
@@ -503,8 +498,13 @@ pub const LevelDBProvider = struct {
             };
         }
 
-        // Pass 2: Deserialize block entity data (items, etc.) now that all blocks
-        // are stored and pairing has set correct container sizes
+        for (pending.items) |p| {
+            const block = dimension.getBlockPtr(p.pos) orelse continue;
+            if (block.hasTrait(ChestTrait.ChestTrait.identifier)) {
+                ChestTrait.restoreAdjacentPairing(block);
+            }
+        }
+
         for (pending.items) |p| {
             const block = dimension.getBlockPtr(p.pos) orelse continue;
             var deser_stream = BinaryStream.init(self.allocator, p.tag_data, null);

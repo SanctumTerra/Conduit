@@ -24,6 +24,67 @@ fn resolvedPairPosition(state: *State, block: *Block) ?Protocol.BlockPosition {
     };
 }
 
+pub fn getResolvedPairPosition(block: *Block) ?Protocol.BlockPosition {
+    const state = block.getTraitState(ChestTrait) orelse return null;
+    return resolvedPairPosition(state, block);
+}
+
+pub fn restoreAdjacentPairing(block: *Block) void {
+    const state = block.getTraitState(ChestTrait) orelse return;
+    const perm = block.getPermutation(0) catch return;
+    const direction = perm.state.get("minecraft:cardinal_direction") orelse return;
+
+    const offsets: [2][2]i32 = switch (direction) {
+        .string => |dir| blk: {
+            if (std.mem.eql(u8, dir, "north") or std.mem.eql(u8, dir, "south")) {
+                break :blk .{ .{ -1, 0 }, .{ 1, 0 } };
+            } else {
+                break :blk .{ .{ 0, -1 }, .{ 0, 1 } };
+            }
+        },
+        else => return,
+    };
+
+    for (offsets) |off| {
+        const adj_pos = Protocol.BlockPosition{
+            .x = block.position.x + off[0],
+            .y = block.position.y,
+            .z = block.position.z + off[1],
+        };
+        const adj_block = block.dimension.getBlockPtr(adj_pos) orelse continue;
+        if (!std.mem.eql(u8, adj_block.getIdentifier(), block.getIdentifier())) continue;
+        const adj_state = adj_block.getTraitState(ChestTrait) orelse continue;
+        const adj_pair = resolvedPairPosition(adj_state, adj_block) orelse continue;
+
+        if (adj_pair.x == block.position.x and adj_pair.y == block.position.y and adj_pair.z == block.position.z) {
+            state.pair_position = adj_block.position;
+            state.is_parent = !adj_state.is_parent;
+
+            if (adj_state.is_parent) {
+                if (adj_state.container) |*container| {
+                    if (container.base.getSize() != 54) {
+                        container.base.setSize(54) catch return;
+                    }
+                }
+            } else if (state.container) |*container| {
+                if (container.base.getSize() != 54) {
+                    container.base.setSize(54) catch return;
+                }
+            }
+            return;
+        }
+    }
+
+    state.pair_position = null;
+    state.is_parent = false;
+    if (state.container) |*container| {
+        if (container.base.getSize() != 27) {
+            container.base.setSize(27) catch return;
+        }
+    }
+    tryPairAdjacent(state, block);
+}
+
 fn onAttach(state: *State, block: *Block) void {
     if (state.container == null) {
         state.container = BlockContainer.init(block.allocator, .Container, 27) catch return;
@@ -54,26 +115,6 @@ fn onDeserialize(state: *State, tag: *const CompoundTag) void {
             .List => |list| {
                 serialization.deserializeContainer(container.base.allocator, &container.base, &list);
             },
-            else => {},
-        }
-    }
-
-    const pair_x = switch (tag.get("pairx") orelse return) {
-        .Int => |v| v.value,
-        else => return,
-    };
-    const pair_z = switch (tag.get("pairz") orelse return) {
-        .Int => |v| v.value,
-        else => return,
-    };
-    state.pair_position = .{
-        .x = pair_x,
-        .y = 0,
-        .z = pair_z,
-    };
-    if (tag.get("pairlead")) |pair_lead| {
-        switch (pair_lead) {
-            .Byte => |v| state.is_parent = v.value != 0,
             else => {},
         }
     }
@@ -135,6 +176,7 @@ fn sendActorData(block: *Block, player: *Player) void {
     tag.set("x", .{ .Int = NBT.IntTag.init(block.position.x, null) }) catch return;
     tag.set("y", .{ .Int = NBT.IntTag.init(block.position.y, null) }) catch return;
     tag.set("z", .{ .Int = NBT.IntTag.init(block.position.z, null) }) catch return;
+    block.fireEvent(.Serialize, .{&tag});
     var s = BinaryStream.init(block.allocator, null, null);
     defer s.deinit();
     const pkt = Protocol.BlockActorDataPacket{ .position = block.position, .nbt = tag };

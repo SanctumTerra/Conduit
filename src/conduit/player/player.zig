@@ -80,6 +80,7 @@ pub const Player = struct {
             .last_chunk_x = 0,
             .last_chunk_z = 0,
             .initialized = false,
+            .visibility_tick = ChunkLoadingTrait.VISIBILITY_UPDATE_INTERVAL - 1,
         });
         try self.entity.addTrait(chunk_loading);
 
