@@ -18,7 +18,7 @@ pub fn handleRequestChunkRadius(
     player.view_distance = new_distance;
 
     if (changed) {
-        Raknet.Logger.INFO("Player {s} requested chunk radius: {d}, set to: {d}", .{
+        Raknet.Logger.DEBUG("Player {s} requested chunk radius: {d}, set to: {d}", .{
             player.username,
             packet.radius,
             player.view_distance,

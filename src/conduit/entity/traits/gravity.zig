@@ -8,6 +8,8 @@ const MoveDeltaFlags = Protocol.MoveDeltaFlags;
 
 pub const State = struct {
     force: f32,
+    drag: f32,
+    apply_drag_before_gravity: bool,
     falling_distance: f32,
     falling_ticks: u32,
     on_ground: bool,
@@ -23,10 +25,26 @@ fn hasMotion(entity: *Entity) bool {
     return @abs(entity.motion.x) > 0.001 or @abs(entity.motion.y) > 0.001 or @abs(entity.motion.z) > 0.001;
 }
 
+fn applyAirPhysics(motion: *Protocol.Vector3f, drag: f32, gravity: f32, apply_drag_before_gravity: bool) void {
+    if (apply_drag_before_gravity and drag > 0) {
+        motion.x *= 1.0 - drag;
+        motion.y *= 1.0 - drag;
+        motion.z *= 1.0 - drag;
+    }
+
+    motion.y += gravity;
+
+    if (!apply_drag_before_gravity and drag > 0) {
+        motion.x *= 1.0 - drag;
+        motion.y *= 1.0 - drag;
+        motion.z *= 1.0 - drag;
+    }
+}
+
 fn onTick(state: *State, entity: *Entity) void {
     const dimension = entity.dimension orelse return;
 
-    entity.motion.y += state.force;
+    applyAirPhysics(&entity.motion, state.drag, state.force, state.apply_drag_before_gravity);
 
     const new_pos = entity.position.add(entity.motion);
     entity.position = Protocol.Vector3f.init(new_pos.x, new_pos.y, new_pos.z);
@@ -144,9 +162,20 @@ pub const GravityTrait = EntityTrait(State, .{
     },
     .default_state = .{
         .force = -0.08,
+        .drag = 0.0,
+        .apply_drag_before_gravity = false,
         .falling_distance = 0,
         .falling_ticks = 0,
         .on_ground = false,
     },
     .onTick = onTick,
 });
+
+test "item air physics matches pocketmine order" {
+    var motion = Protocol.Vector3f.init(0.4, 0.0, 0.4);
+    applyAirPhysics(&motion, 0.02, -0.04, true);
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0.392), motion.x, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.04), motion.y, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.392), motion.z, 0.0001);
+}

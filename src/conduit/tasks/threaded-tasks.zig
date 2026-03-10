@@ -11,11 +11,52 @@ pub const ThreadedTask = struct {
     ctx: *anyopaque,
 };
 
-pub fn computeWorkerCount() usize {
-    const cpu_count = std.Thread.getCpuCount() catch return 4;
+pub const WorkerCountResolution = struct {
+    cpu_count: usize,
+    recommended_max: usize,
+    requested_count: usize,
+    resolved_count: usize,
+    auto_selected: bool,
+};
+
+pub fn computeWorkerCount(configured_count: usize) usize {
+    return resolveWorkerCount(configured_count).resolved_count;
+}
+
+pub fn totalServerThreadCount(worker_count: usize) usize {
+    return 1 + 2 + worker_count;
+}
+
+pub fn resolveWorkerCount(configured_count: usize) WorkerCountResolution {
+    const cpu_count = std.Thread.getCpuCount() catch 4;
+    return resolveWorkerCountForCpu(configured_count, cpu_count);
+}
+
+fn resolveWorkerCountForCpu(configured_count: usize, cpu_count: usize) WorkerCountResolution {
+    const recommended_max = recommendedWorkerCountForCpu(cpu_count);
+    if (configured_count > 0) {
+        return .{
+            .cpu_count = cpu_count,
+            .recommended_max = recommended_max,
+            .requested_count = configured_count,
+            .resolved_count = @min(configured_count, recommended_max),
+            .auto_selected = false,
+        };
+    }
+
+    return .{
+        .cpu_count = cpu_count,
+        .recommended_max = recommended_max,
+        .requested_count = 0,
+        .resolved_count = recommended_max,
+        .auto_selected = true,
+    };
+}
+
+fn recommendedWorkerCountForCpu(cpu_count: usize) usize {
     if (cpu_count <= 2) return 1;
     const count = cpu_count - 2;
-    return @min(count, 16);
+    return @max(@as(usize, 1), @min(count, 16));
 }
 
 pub const ThreadedTaskQueue = struct {
@@ -27,8 +68,11 @@ pub const ThreadedTaskQueue = struct {
     completed_mutex: std.Thread.Mutex,
     workers: []?std.Thread,
     running: bool,
+    configured_worker_count: usize,
+    detected_cpu_count: usize,
+    active_worker_count: usize,
 
-    pub fn init(allocator: std.mem.Allocator) ThreadedTaskQueue {
+    pub fn init(allocator: std.mem.Allocator, configured_worker_count: usize) ThreadedTaskQueue {
         return .{
             .allocator = allocator,
             .pending = std.ArrayList(ThreadedTask){ .items = &.{}, .capacity = 0 },
@@ -38,16 +82,30 @@ pub const ThreadedTaskQueue = struct {
             .completed_mutex = .{},
             .workers = &.{},
             .running = false,
+            .configured_worker_count = configured_worker_count,
+            .detected_cpu_count = 0,
+            .active_worker_count = 0,
         };
     }
 
     pub fn start(self: *ThreadedTaskQueue) !void {
         self.running = true;
-        const worker_count = computeWorkerCount();
+        const resolution = resolveWorkerCount(self.configured_worker_count);
+        self.detected_cpu_count = resolution.cpu_count;
+        self.active_worker_count = resolution.resolved_count;
+        const worker_count = resolution.resolved_count;
         self.workers = try self.allocator.alloc(?std.Thread, worker_count);
         for (self.workers) |*w| {
             w.* = try std.Thread.spawn(.{}, workerLoop, .{self});
         }
+    }
+
+    pub fn workerCount(self: *const ThreadedTaskQueue) usize {
+        return self.active_worker_count;
+    }
+
+    pub fn detectedCpuCount(self: *const ThreadedTaskQueue) usize {
+        return self.detected_cpu_count;
     }
 
     pub fn enqueue(self: *ThreadedTaskQueue, task: ThreadedTask) !void {
@@ -136,9 +194,20 @@ pub const ThreadedTaskQueue = struct {
 };
 
 test "dynamic worker count bounds" {
-    const count = computeWorkerCount();
-    try std.testing.expect(count >= 1);
-    try std.testing.expect(count <= 16);
+    try std.testing.expectEqual(@as(usize, 1), resolveWorkerCountForCpu(0, 2).resolved_count);
+    try std.testing.expectEqual(@as(usize, 6), resolveWorkerCountForCpu(0, 8).resolved_count);
+    try std.testing.expectEqual(@as(usize, 16), resolveWorkerCountForCpu(0, 32).resolved_count);
+}
+
+test "configured worker count is respected" {
+    try std.testing.expectEqual(@as(usize, 4), resolveWorkerCountForCpu(4, 8).resolved_count);
+    try std.testing.expectEqual(@as(usize, 6), resolveWorkerCountForCpu(128, 8).resolved_count);
+    try std.testing.expectEqual(@as(usize, 1), resolveWorkerCountForCpu(4, 2).resolved_count);
+}
+
+test "server thread count includes main raknet and workers" {
+    try std.testing.expectEqual(@as(usize, 13), totalServerThreadCount(10));
+    try std.testing.expectEqual(@as(usize, 4), totalServerThreadCount(1));
 }
 
 test "task queue completeness with swapRemove" {
@@ -162,7 +231,7 @@ test "task queue completeness with swapRemove" {
         ctx.* = .{ .counter = &completed_count };
     }
 
-    var queue = ThreadedTaskQueue.init(allocator);
+    var queue = ThreadedTaskQueue.init(allocator, 0);
     defer queue.deinit();
     try queue.start();
 
@@ -177,7 +246,7 @@ test "task queue completeness with swapRemove" {
     while (attempts < 1000) : (attempts += 1) {
         queue.drainCompleted(std.math.maxInt(u64));
         if (@atomicLoad(usize, &completed_count, .seq_cst) == N) break;
-        std.time.sleep(1_000_000);
+        std.Thread.sleep(1_000_000);
     }
 
     try std.testing.expectEqual(N, @atomicLoad(usize, &completed_count, .seq_cst));

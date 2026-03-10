@@ -4,6 +4,7 @@ const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const Events = @import("../../events/root.zig");
+const PlayerLog = @import("../player-log.zig");
 
 pub fn handleTextPacket(
     network: *NetworkHandler,
@@ -20,6 +21,7 @@ pub fn handleTextPacket(
             .message = text.message,
         };
         if (!network.conduit.events.emit(.PlayerChat, &event)) return;
+        PlayerLog.logChat(sender.username, event.message);
 
         var str = BinaryStream.init(network.allocator, null, null);
         defer str.deinit();

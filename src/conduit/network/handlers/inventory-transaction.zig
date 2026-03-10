@@ -11,6 +11,7 @@ const applyTraitsFromRegistry = @import("../../world/block/traits/trait.zig").ap
 const resolveWithPlacement = @import("../../world/block/traits/rotation.zig").resolveWithPlacement;
 const placeUpperBlock = @import("../../world/block/traits/rotation.zig").placeUpperBlock;
 const Events = @import("../../events/types.zig");
+const PlayerMath = @import("../../player/player.zig");
 
 pub fn handleInventoryTransaction(
     network: *NetworkHandler,
@@ -19,6 +20,7 @@ pub fn handleInventoryTransaction(
 ) !void {
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
     const packet = try Protocol.InventoryTransactionPacket.deserialize(stream);
+    // Raknet.Logger.WARN("{any}", .{packet});
 
     switch (packet.transactionType) {
         .Normal => {
@@ -29,18 +31,11 @@ pub fn handleInventoryTransaction(
             const inv_state = player.entity.getTraitState(InventoryTrait.InventoryTrait) orelse return;
             const item = inv_state.container.base.getItem(inv_state.selected_slot) orelse return;
             const count = @min(if (data.drop_count == 0) @as(u16, 1) else data.drop_count, item.stackSize);
-            const item_type = item.item_type;
+            const dropped = item.cloneWithCount(player.entity.allocator, count) catch return;
 
-            const pos = player.entity.position;
-            const yaw = player.entity.rotation.y * std.math.pi / 180.0;
-            const pitch = player.entity.rotation.x * std.math.pi / 180.0;
-            const throw_vel = Protocol.Vector3f.init(
-                -@sin(yaw) * @cos(pitch) * 0.3,
-                -@sin(pitch) * 0.3 + 0.1,
-                @cos(yaw) * @cos(pitch) * 0.3,
-            );
-            const spawn_pos = Protocol.Vector3f.init(pos.x, pos.y + 1.25, pos.z);
-            _ = dimension.spawnItemEntity(item_type, count, spawn_pos, 40, throw_vel) catch return;
+            const throw_vel = PlayerMath.playerDropVelocity(player.entity.rotation);
+            const spawn_pos = PlayerMath.playerDropSpawnPosition(player.entity.position);
+            _ = dimension.spawnItemStackEntity(dropped, spawn_pos, 40, throw_vel) catch return;
 
             inv_state.container.base.removeItem(inv_state.selected_slot, count);
             inv_state.container.updateSlot(inv_state.selected_slot);
@@ -69,7 +64,12 @@ pub fn handleInventoryTransaction(
                 target.fireEvent(.Damage, .{ target, @as(f32, 1.0) });
             }
         },
-        else => {},
+        else => {
+            Raknet.Logger.WARN("Unhandled InventoryTransaction from {s}: {any}", .{
+                player.username,
+                packet.transactionType,
+            });
+        },
     }
 }
 

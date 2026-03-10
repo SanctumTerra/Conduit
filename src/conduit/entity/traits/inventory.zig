@@ -54,9 +54,26 @@ pub fn getHeldItem(state: *const State) ?*const ItemStack {
     return state.container.base.getItem(state.selected_slot);
 }
 
+test "selectHeldSlot updates held slot without packet side effects" {
+    const allocator = std.testing.allocator;
+
+    var container = try EntityContainer.init(allocator, undefined, .Inventory, 36);
+    defer container.deinit();
+
+    var state = State{
+        .container = container,
+        .selected_slot = 0,
+        .opened = false,
+    };
+
+    selectHeldSlot(&state, 5);
+
+    try std.testing.expectEqual(@as(u8, 5), state.selected_slot);
+}
+
 pub fn setHeldItem(state: *State, entity: *Entity, slot: u8) void {
     const player = getPlayer(entity) orelse return;
-    state.selected_slot = slot;
+    selectHeldSlot(state, slot);
 
     const held = getHeldItem(state);
     const item_descriptor = if (held) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{
@@ -80,6 +97,10 @@ pub fn setHeldItem(state: *State, entity: *Entity, slot: u8) void {
     };
     const serialized = packet.serialize(&stream) catch return;
     player.network.sendPacket(player.connection, serialized) catch {};
+}
+
+pub fn selectHeldSlot(state: *State, slot: u8) void {
+    state.selected_slot = slot;
 }
 
 pub const InventoryTrait = EntityTrait(State, .{

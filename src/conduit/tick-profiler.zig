@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const Phase = enum {
+    raknet_tick,
     player_tick,
     world_tick,
     drain_completed_1,
@@ -86,9 +87,10 @@ pub const TickProfiler = struct {
         file.writeAll(line) catch return;
 
         const names = [_][]const u8{
-            "player_tick",  "world_tick",        "drain_completed_1",
-            "main_tasks",   "drain_completed_2", "total",
-            "batch_chunks", "batch_send",        "batch_block_data",
+            "raknet_tick",  "player_tick",       "world_tick",
+            "drain_completed_1", "main_tasks",   "drain_completed_2",
+            "total",        "batch_chunks",      "batch_send",
+            "batch_block_data",
         };
 
         for (0..PHASE_COUNT) |i| {

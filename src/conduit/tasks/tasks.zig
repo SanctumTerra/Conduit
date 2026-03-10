@@ -37,7 +37,11 @@ pub const TaskQueue = struct {
         while (i < self.tasks.items.len) {
             const task = self.tasks.items[i];
             if (task.owner_id == owner_id and std.mem.eql(u8, task.name, name)) {
-                if (cleanup) |cb| cb(task.ctx);
+                if (cleanup) |cb| {
+                    cb(task.ctx);
+                } else if (task.cleanup) |cb| {
+                    cb(task.ctx);
+                }
                 _ = self.tasks.orderedRemove(i);
             } else {
                 i += 1;
@@ -47,8 +51,10 @@ pub const TaskQueue = struct {
 
     pub fn runUntil(self: *TaskQueue, tick_start: i128, budget_ns: u64) bool {
         var did_work = false;
+        const max_tasks_this_run = self.tasks.items.len;
+        var tasks_run: usize = 0;
         var idx: usize = 0;
-        while (self.tasks.items.len > 0) {
+        while (self.tasks.items.len > 0 and tasks_run < max_tasks_this_run) {
             const elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - tick_start));
             if (elapsed >= budget_ns) break;
 
@@ -58,10 +64,12 @@ pub const TaskQueue = struct {
             const task = self.tasks.items[idx];
             const done = task.func(task.ctx);
             did_work = true;
+            tasks_run += 1;
 
             if (idx >= self.tasks.items.len) break;
 
             if (done) {
+                if (task.cleanup) |cb| cb(task.ctx);
                 _ = self.tasks.orderedRemove(idx);
                 if (self.tasks.items.len == 0) break;
                 if (idx >= self.tasks.items.len) idx = 0;
@@ -76,3 +84,51 @@ pub const TaskQueue = struct {
         return self.tasks.items.len;
     }
 };
+
+test "task queue runs cleanup when task completes" {
+    const allocator = std.testing.allocator;
+
+    const Context = struct {
+        ran: *bool,
+        cleaned: *usize,
+    };
+
+    const run = struct {
+        fn f(ctx: *anyopaque) bool {
+            const state: *Context = @ptrCast(@alignCast(ctx));
+            state.ran.* = true;
+            return true;
+        }
+    }.f;
+
+    const cleanup = struct {
+        fn f(ctx: *anyopaque) void {
+            const state: *Context = @ptrCast(@alignCast(ctx));
+            state.cleaned.* += 1;
+        }
+    }.f;
+
+    var ran = false;
+    var cleaned: usize = 0;
+    var state = Context{
+        .ran = &ran,
+        .cleaned = &cleaned,
+    };
+
+    var queue = TaskQueue.init(allocator);
+    defer queue.deinit();
+
+    try queue.enqueue(.{
+        .func = run,
+        .ctx = @ptrCast(&state),
+        .name = "cleanup-test",
+        .cleanup = cleanup,
+    });
+
+    const tick_start = std.time.nanoTimestamp();
+    _ = queue.runUntil(tick_start, std.math.maxInt(u64));
+
+    try std.testing.expect(ran);
+    try std.testing.expectEqual(@as(usize, 1), cleaned);
+    try std.testing.expectEqual(@as(usize, 0), queue.pending());
+}

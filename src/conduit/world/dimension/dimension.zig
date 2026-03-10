@@ -4,6 +4,7 @@ const Protocol = @import("protocol");
 const World = @import("../world.zig").World;
 const Chunk = @import("../chunk/chunk.zig").Chunk;
 const BlockPermutation = @import("../block/block-permutation.zig").BlockPermutation;
+const BlockState = @import("../block/block-permutation.zig").BlockState;
 const Block = @import("../block/block.zig").Block;
 const TerrainGenerator = @import("../generator/terrain-generator.zig").TerrainGenerator;
 const ThreadedGenerator = @import("../generator/threaded-generator.zig").ThreadedGenerator;
@@ -15,7 +16,6 @@ const ItemStack = @import("../../items/item-stack.zig").ItemStack;
 const ItemType = @import("../../items/item-type.zig").ItemType;
 const GravityTrait = @import("../../entity/traits/gravity.zig").GravityTrait;
 const ItemEntityTrait = @import("../../entity/traits/item-entity.zig").ItemEntityTrait;
-const tryMergeNearby = @import("../../entity/traits/item-entity.zig").tryMergeNearby;
 
 pub const ChunkHash = i64;
 
@@ -368,37 +368,12 @@ pub const Dimension = struct {
     }
 
     pub fn spawnItemEntity(self: *Dimension, item_type: *ItemType, count: u16, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !*Entity {
+        const stack = ItemStack.init(self.allocator, item_type, .{ .stackSize = count });
+        return self.spawnItemStackEntity(stack, position, pickup_delay, velocity);
+    }
+
+    pub fn spawnItemStackEntity(self: *Dimension, stack: ItemStack, position: Protocol.Vector3f, pickup_delay: u32, velocity: Protocol.Vector3f) !*Entity {
         const BinaryStream = @import("BinaryStream").BinaryStream;
-
-        if (tryMergeNearby(self, item_type.identifier, count, position)) |existing| {
-            const existing_state = existing.getTraitState(ItemEntityTrait) orelse return existing;
-            self.broadcastRemoveEntity(existing) catch {};
-
-            var merged_stack = ItemStack.init(self.allocator, item_type, .{ .stackSize = existing_state.count });
-            const merged_net = merged_stack.toNetworkStack();
-            defer merged_stack.deinit();
-
-            var stream = BinaryStream.init(self.allocator, null, null);
-            defer stream.deinit();
-
-            const packet = Protocol.AddItemActorPacket{
-                .uniqueEntityId = existing.unique_id,
-                .runtimeEntityId = @bitCast(existing.runtime_id),
-                .item = merged_net,
-                .position = existing.position,
-                .velocity = Protocol.Vector3f.init(0, 0, 0),
-            };
-            const serialized = try packet.serialize(&stream, self.allocator);
-
-            const conduit = self.world.conduit;
-            const snapshots = conduit.getPlayerSnapshots();
-            for (snapshots) |player| {
-                if (!player.spawned) continue;
-                conduit.network.sendPacket(player.connection, serialized) catch {};
-            }
-
-            return existing;
-        }
 
         const entity = try self.allocator.create(Entity);
         entity.* = Entity.init(self.allocator, &item_entity_type, self);
@@ -406,6 +381,8 @@ pub const Dimension = struct {
 
         const gravity = try GravityTrait.create(self.allocator, .{
             .force = -0.04,
+            .drag = 0.02,
+            .apply_drag_before_gravity = true,
             .falling_distance = 0,
             .falling_ticks = 0,
             .on_ground = false,
@@ -413,8 +390,7 @@ pub const Dimension = struct {
         try entity.addTrait(gravity);
 
         const pickup = try ItemEntityTrait.create(self.allocator, .{
-            .item_identifier = item_type.identifier,
-            .count = count,
+            .stack = stack,
             .pickup_delay = pickup_delay,
             .lifetime = 0,
             .pending_remove = false,
@@ -423,10 +399,8 @@ pub const Dimension = struct {
 
         entity.motion = velocity;
         try self.entities.put(entity.runtime_id, entity);
-
-        var item_stack = ItemStack.init(self.allocator, item_type, .{ .stackSize = count });
-        const net_item = item_stack.toNetworkStack();
-        defer item_stack.deinit();
+        const item_state = entity.getTraitState(ItemEntityTrait) orelse return error.MissingItemEntityTrait;
+        const net_item = item_state.stack.toNetworkStack();
 
         var stream = BinaryStream.init(self.allocator, null, null);
         defer stream.deinit();
@@ -563,8 +537,11 @@ pub const TickScheduler = struct {
         const key = TickKey{ .pos_hash = Dimension.blockPosHash(pos), .block_hash = block_hash };
         if (self.queued.contains(key)) return;
         self.queued.put(key, {}) catch return;
-        const slot_idx = (self.offset + delay) % RING_SIZE;
-        self.ring[slot_idx].append(self.allocator, .{ .pos = pos, .block_hash = block_hash }) catch return;
+        const slot_idx = (self.offset + delay - 1) % RING_SIZE;
+        self.ring[slot_idx].append(self.allocator, .{ .pos = pos, .block_hash = block_hash }) catch {
+            _ = self.queued.remove(key);
+            return;
+        };
     }
 
     pub fn stepTick(self: *TickScheduler) []const ScheduledTick {
@@ -655,6 +632,23 @@ test "tick scheduler rejects duplicates" {
     }
 }
 
+test "tick scheduler delay one fires on next step" {
+    var sched = TickScheduler.init(std.testing.allocator);
+    defer sched.deinit();
+
+    const pos = Protocol.BlockPosition{ .x = 3, .y = 64, .z = -9 };
+    const block_hash: u64 = 0x1234;
+
+    sched.schedule(pos, block_hash, 1);
+
+    const delivered = sched.stepTick();
+    defer sched.clearCurrentSlot();
+
+    try std.testing.expectEqual(@as(usize, 1), delivered.len);
+    try std.testing.expectEqual(block_hash, delivered[0].block_hash);
+    try std.testing.expectEqual(Dimension.blockPosHash(pos), Dimension.blockPosHash(delivered[0].pos));
+}
+
 pub const RandomTickEligibility = struct {
     eligible: []bool,
     allocator: std.mem.Allocator,
@@ -662,7 +656,7 @@ pub const RandomTickEligibility = struct {
 
     pub fn init(allocator: std.mem.Allocator, eligible_identifiers: []const []const u8) !RandomTickEligibility {
         var max_id: usize = 0;
-        var iter = BlockPermutation.permutations.valueIterator();
+        var iter = BlockPermutation.valueIterator();
         while (iter.next()) |perm| {
             const nid: usize = @intCast(@as(u32, @bitCast(perm.*.network_id)));
             if (nid > max_id) max_id = nid;
@@ -671,7 +665,7 @@ pub const RandomTickEligibility = struct {
         const table = try allocator.alloc(bool, max_id + 1);
         @memset(table, false);
 
-        iter = BlockPermutation.permutations.valueIterator();
+        iter = BlockPermutation.valueIterator();
         while (iter.next()) |perm| {
             const nid: usize = @intCast(@as(u32, @bitCast(perm.*.network_id)));
             for (eligible_identifiers) |eid| {
@@ -731,15 +725,15 @@ test "random tick eligibility lookup" {
     try BlockPermutation.initRegistry(allocator);
     defer BlockPermutation.deinitRegistry();
 
-    const state1 = BlockPermutation.BlockState.init(allocator);
+    const state1 = BlockState.init(allocator);
     const perm1 = try BlockPermutation.init(allocator, 1, "minecraft:grass_block", state1);
     try perm1.register();
 
-    const state2 = BlockPermutation.BlockState.init(allocator);
+    const state2 = BlockState.init(allocator);
     const perm2 = try BlockPermutation.init(allocator, 2, "minecraft:stone", state2);
     try perm2.register();
 
-    const state3 = BlockPermutation.BlockState.init(allocator);
+    const state3 = BlockState.init(allocator);
     const perm3 = try BlockPermutation.init(allocator, 3, "minecraft:wheat", state3);
     try perm3.register();
 

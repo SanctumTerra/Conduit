@@ -19,7 +19,7 @@ pub fn handleMobEquipment(
     const player = network.conduit.getPlayerByConnection(connection) orelse return;
 
     const state = player.entity.getTraitState(inventory.InventoryTrait) orelse return;
-    inventory.setHeldItem(state, &player.entity, selected_slot);
+    inventory.selectHeldSlot(state, selected_slot);
 
     const held = inventory.getHeldItem(state);
     const item_descriptor = if (held) |item| item.toNetworkStack() else Protocol.NetworkItemStackDescriptor{

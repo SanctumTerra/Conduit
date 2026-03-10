@@ -13,13 +13,14 @@
             .hash = "BinaryStream-0.0.0-gn8mmnJZAQAnFC-kkrSOzigRqEgMsHddZlmmGELc0jAv",
         },
         .ZigNet = .{
-            .url = "git+https://github.com/SanctumTerra/ZigNet#3fa953f21bd09f1c8193982a3cab3076c4201aee",
-            .hash = "ZigNet-0.0.0-C9ZCIlQJAwBU79sw9p0YqnWf7imScwAJB5oits36iF1H",
+            .url = "git+https://github.com/SanctumTerra/ZigNet#a28727a448b6848800ca4f7359cfa4bdc2d038e3",
+            .hash = "ZigNet-0.0.0-C9ZCIvwTAwCThAD_f--7ZlLr1NEAPOKe5Bhnminu2-ch",
         },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "libs",
         "src",
     },
 }

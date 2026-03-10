@@ -3,6 +3,7 @@ const Raknet = @import("Raknet");
 const BinaryStream = @import("BinaryStream").BinaryStream;
 const Protocol = @import("protocol");
 const ItemStack = @import("../items/item-stack.zig").ItemStack;
+const Display = @import("../items/traits/display.zig");
 const Player = @import("../player/player.zig").Player;
 
 var nextContainerId: i8 = @intFromEnum(Protocol.ContainerId.First);
@@ -104,7 +105,7 @@ pub const Container = struct {
             for (self.storage, 0..) |*slot, i| {
                 if (remaining == 0) break;
                 if (slot.*) |*existing| {
-                    if (existing.item_type == item.item_type and existing.stackSize < existing.item_type.max_stack_size) {
+                    if (existing.isStackCompatible(&item) and existing.stackSize < existing.item_type.max_stack_size) {
                         const space = existing.item_type.max_stack_size - existing.stackSize;
                         const to_add = @min(space, remaining);
                         existing.stackSize += to_add;
@@ -121,7 +122,7 @@ pub const Container = struct {
             } else break;
 
             const to_place = @min(remaining, item.item_type.max_stack_size);
-            self.storage[empty_slot] = ItemStack.init(item.allocator, item.item_type, .{ .stackSize = to_place, .metadata = item.metadata });
+            self.storage[empty_slot] = item.cloneWithCount(self.allocator, to_place) catch return false;
             remaining -= to_place;
             self.updateSlot(@intCast(empty_slot));
         }
@@ -151,7 +152,7 @@ pub const Container = struct {
         }
         self.storage[idx].?.stackSize -= amount;
         self.updateSlot(idx);
-        return ItemStack.init(self.allocator, item.item_type, .{ .stackSize = amount, .metadata = item.metadata });
+        return item.cloneWithCount(self.allocator, amount) catch return null;
     }
 
     pub fn swapItems(self: *Container, slot: u32, other_slot: u32, other_container: ?*Container) void {
@@ -274,3 +275,43 @@ pub const Container = struct {
         return id;
     }
 };
+
+test "takeItem preserves item nbt when splitting a stack" {
+    const allocator = std.testing.allocator;
+    const ItemType = @import("../items/item-type.zig").ItemType;
+    const NBT = @import("nbt");
+
+    try ItemType.initRegistry(allocator);
+    defer ItemType.deinitRegistry();
+
+    var container = try Container.init(allocator, .Inventory, 9);
+    defer container.deinit();
+
+    const stone = try ItemType.init(
+        allocator,
+        try allocator.dupe(u8, "minecraft:test_named_stone"),
+        1,
+        64,
+        true,
+        &.{},
+        false,
+        0,
+        NBT.Tag{ .Compound = NBT.CompoundTag.init(allocator, null) },
+    );
+    try stone.register();
+    var item = ItemStack.init(allocator, stone, .{ .stackSize = 5 });
+    const display = try Display.DisplayTrait.create(allocator, .{});
+    try item.addTrait(display);
+    try Display.setDisplayName(&item, "Named Stone");
+    container.setItem(0, item);
+
+    var split = container.takeItem(0, 2) orelse return error.TestUnexpectedResult;
+    defer split.deinit();
+
+    try std.testing.expectEqual(@as(u16, 2), split.stackSize);
+    try std.testing.expectEqualStrings("Named Stone", Display.getDisplayName(&split) orelse return error.TestUnexpectedResult);
+
+    const remaining = container.getItem(0) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqual(@as(u16, 3), remaining.stackSize);
+    try std.testing.expectEqualStrings("Named Stone", Display.getDisplayName(remaining) orelse return error.TestUnexpectedResult);
+}

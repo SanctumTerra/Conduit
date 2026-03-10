@@ -2,6 +2,7 @@
 
 zig-out
 dump
+AGENTS.md
 .vscode
 .cursor
 .kiro
@@ -12,6 +13,8 @@ dump
 .build
 .test
 .claude
+
+zig-out-verify
 
 server.properties
 worlds/

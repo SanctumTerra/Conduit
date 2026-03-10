@@ -76,16 +76,23 @@ fn handle(raw: *anyopaque) void {
         return;
     };
 
-    const avg_tick_ms = conduit.profiler.avgTickMs();
+    const target_tps = conduit.targetTps();
+    const current_mspt = conduit.current_mspt;
+    const raknet_mspt = conduit.current_raknet_mspt;
+    const game_mspt = conduit.current_game_mspt;
     const slow_pct = conduit.profiler.slowTickPct();
-    const tps_color: []const u8 = if (conduit.current_tps >= 19.5) "§a" else if (conduit.current_tps >= 15.0) "§e" else "§c";
+    const tps_ratio = if (target_tps > 0.0) conduit.current_tps / target_tps else 1.0;
+    const tps_color: []const u8 = if (tps_ratio >= 0.975) "§a" else if (tps_ratio >= 0.75) "§e" else "§c";
     const slow_color: []const u8 = if (conduit.profiler.slow_ticks == 0) "§a" else if (slow_pct < 5.0) "§e" else "§c";
 
-    std.fmt.format(writer, "§6World: §f{s}\n§7TPS: {s}{d:.1} §7Tick: §f{d:.2}ms §7SlowTicks: {s}{d} §7({d:.1}%%)", .{
+    std.fmt.format(writer, "§6World: §f{s}\n§7TPS: {s}{d:.1}§7/§f{d:.1} §7MSPT: §f{d:.2}ms §7RakNet: §f{d:.2}ms §7Game: §f{d:.2}ms §7SlowTicks: {s}{d} §7({d:.1}%%)", .{
         world.identifier,
         tps_color,
         conduit.current_tps,
-        avg_tick_ms,
+        target_tps,
+        current_mspt,
+        raknet_mspt,
+        game_mspt,
         slow_color,
         conduit.profiler.slow_ticks,
         slow_pct,

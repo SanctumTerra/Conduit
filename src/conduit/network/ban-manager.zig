@@ -1,5 +1,7 @@
 const std = @import("std");
 const Raknet = @import("Raknet");
+const shouldEmitVerboseStartupLogs = @import("../config.zig").shouldEmitVerboseStartupLogs;
+const builtin = @import("builtin");
 
 pub const BanEntry = struct {
     uuid: []const u8,
@@ -112,7 +114,9 @@ pub const BanManager = struct {
             };
             self.entries.append(self.allocator, entry) catch continue;
         }
-        Raknet.Logger.INFO("Loaded {d} banned players", .{self.entries.items.len});
+        if (shouldEmitVerboseStartupLogs(builtin.mode)) {
+            Raknet.Logger.INFO("Loaded {d} banned players", .{self.entries.items.len});
+        }
     }
 
     fn save(self: *BanManager) void {

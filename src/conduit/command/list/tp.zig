@@ -5,6 +5,7 @@ const Command = @import("../command.zig").Command;
 const CommandContext = @import("../context.zig").CommandContext;
 const CommandRegistry = @import("../registry.zig").CommandRegistry;
 const types = @import("../types.zig");
+const PlayerMath = @import("../../player/player.zig");
 
 pub fn register(registry: *CommandRegistry) !void {
     const cmd = try Command.init(
@@ -126,7 +127,8 @@ fn handle(raw: *anyopaque) void {
 }
 
 fn teleportPlayer(ctx: *CommandContext, player: *@import("../../player/player.zig").Player, pos: Protocol.Vector3f) void {
-    player.entity.position = pos;
+    const internal_pos = commandPositionToInternalPosition(pos);
+    player.entity.position = internal_pos;
 
     var stream = BinaryStream.init(ctx.allocator, null, null);
     defer stream.deinit();
@@ -142,4 +144,17 @@ fn teleportPlayer(ctx: *CommandContext, player: *@import("../../player/player.zi
     };
     const serialized = packet.serialize(&stream) catch return;
     player.network.sendPacket(player.connection, serialized) catch {};
+}
+
+fn commandPositionToInternalPosition(pos: Protocol.Vector3f) Protocol.Vector3f {
+    return PlayerMath.worldFeetToInternalPosition(pos);
+}
+
+test "teleport command converts world feet position to internal player position" {
+    const world_pos = Protocol.Vector3f.init(10, 64, -5);
+    const internal = commandPositionToInternalPosition(world_pos);
+
+    try std.testing.expectEqual(@as(f32, 10), internal.x);
+    try std.testing.expectEqual(@as(f32, 65.62), internal.y);
+    try std.testing.expectEqual(@as(f32, -5), internal.z);
 }

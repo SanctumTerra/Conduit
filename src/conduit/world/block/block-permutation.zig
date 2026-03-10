@@ -126,6 +126,10 @@ pub const BlockPermutation = struct {
         return permutations.get(network_id);
     }
 
+    pub fn valueIterator() @TypeOf(permutations.valueIterator()) {
+        return permutations.valueIterator();
+    }
+
     pub fn matches(self: *const BlockPermutation, state: BlockState) bool {
         var iter = state.iterator();
         while (iter.next()) |entry| {

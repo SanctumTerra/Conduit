@@ -6,13 +6,12 @@ const EntityTrait = @import("./trait.zig").EntityTrait;
 const Dimension = @import("../../world/dimension/dimension.zig").Dimension;
 const Player = @import("../../player/player.zig").Player;
 const ItemStack = @import("../../items/item-stack.zig").ItemStack;
-const ItemType = @import("../../items/item-type.zig").ItemType;
 const InventoryTrait = @import("./inventory.zig");
+const GravityTrait = @import("./gravity.zig").GravityTrait;
 const Container = @import("../../container/container.zig").Container;
 
 pub const State = struct {
-    item_identifier: []const u8,
-    count: u16,
+    stack: ItemStack,
     pickup_delay: u32,
     lifetime: u32,
     pending_remove: bool,
@@ -24,6 +23,21 @@ const MERGE_DISTANCE: f32 = 3.0;
 const DESPAWN_TICKS: u32 = 6000;
 const PLAYER_EYE_HEIGHT: f32 = 1.62;
 
+fn canMergeGroundedItems(
+    existing: *const ItemStack,
+    existing_pending_remove: bool,
+    existing_grounded: bool,
+    incoming: *const ItemStack,
+    incoming_grounded: bool,
+    dist: f32,
+) bool {
+    if (existing_pending_remove) return false;
+    if (!existing_grounded or !incoming_grounded) return false;
+    if (!existing.isStackCompatible(incoming)) return false;
+    if (existing.stackSize + incoming.stackSize > existing.item_type.max_stack_size) return false;
+    return dist <= MERGE_DISTANCE;
+}
+
 fn onTick(state: *State, entity: *Entity) void {
     if (state.pending_remove) return;
 
@@ -34,12 +48,16 @@ fn onTick(state: *State, entity: *Entity) void {
         return;
     }
 
+    const dimension = entity.dimension orelse return;
+    tryMergeGroundedEntity(dimension, entity, state);
+
+    if (state.pending_remove) return;
+
     if (state.pickup_delay > 0) {
         state.pickup_delay -= 1;
         return;
     }
 
-    const dimension = entity.dimension orelse return;
     const conduit = dimension.world.conduit;
 
     conduit.players_mutex.lock();
@@ -58,10 +76,9 @@ fn onTick(state: *State, entity: *Entity) void {
         if (dist > MAGNET_DISTANCE) continue;
 
         if (dist <= COLLECT_DISTANCE) {
-            const item_type = ItemType.get(state.item_identifier) orelse continue;
             const inv_state = player.entity.getTraitState(InventoryTrait.InventoryTrait) orelse continue;
 
-            if (!tryStackIntoInventory(&inv_state.container.base, item_type, state.count, player.entity.allocator)) continue;
+            if (!tryStackIntoInventory(&inv_state.container.base, &state.stack)) continue;
             inv_state.container.sendOwnerContentUpdate();
 
             broadcastPickup(dimension, entity, player);
@@ -86,16 +103,14 @@ fn markForRemoval(state: *State, entity: *Entity) void {
     dimension.pending_removals.append(dimension.allocator, entity.runtime_id) catch {};
 }
 
-fn tryStackIntoInventory(container: *Container, item_type: *ItemType, count: u16, allocator: std.mem.Allocator) bool {
-    var remaining: u16 = count;
+fn tryStackIntoInventory(container: *Container, stack: *const ItemStack) bool {
+    var remaining: u16 = stack.stackSize;
 
-    if (item_type.stackable) {
+    if (stack.item_type.stackable) {
         for (container.storage, 0..) |*slot, i| {
             if (remaining == 0) break;
             if (slot.*) |*existing| {
-                if (existing.item_type == item_type and
-                    existing.metadata == 0 and
-                    existing.nbt == null and
+                if (existing.isStackCompatible(stack) and
                     existing.stackSize < existing.item_type.max_stack_size)
                 {
                     const space = existing.item_type.max_stack_size - existing.stackSize;
@@ -113,8 +128,8 @@ fn tryStackIntoInventory(container: *Container, item_type: *ItemType, count: u16
             if (slot == null) break i;
         } else break;
 
-        const to_place = @min(remaining, item_type.max_stack_size);
-        container.storage[empty_slot] = ItemStack.init(allocator, item_type, .{ .stackSize = to_place });
+        const to_place = @min(remaining, stack.item_type.max_stack_size);
+        container.storage[empty_slot] = stack.cloneWithCount(container.allocator, to_place) catch break;
         remaining -= to_place;
         container.updateSlot(@intCast(empty_slot));
     }
@@ -140,28 +155,100 @@ fn broadcastPickup(dimension: *Dimension, entity: *Entity, player: *Player) void
     }
 }
 
-pub fn tryMergeNearby(dimension: *Dimension, identifier: []const u8, count: u16, position: Protocol.Vector3f) ?*Entity {
+fn tryMergeGroundedEntity(dimension: *Dimension, entity: *Entity, state: *State) void {
+    const gravity_state = entity.getTraitState(GravityTrait) orelse return;
+    if (!gravity_state.on_ground) return;
+
+    const other = tryMergeNearbyGrounded(dimension, entity, state, true) orelse return;
+    const other_state = other.getTraitState(ItemEntityTrait) orelse return;
+
+    other_state.stack.stackSize += state.stack.stackSize;
+    other_state.pickup_delay = @max(other_state.pickup_delay, state.pickup_delay);
+    other_state.lifetime = @min(other_state.lifetime, state.lifetime);
+
+    refreshMergedItemEntity(dimension, other);
+    markForRemoval(state, entity);
+}
+
+fn refreshMergedItemEntity(dimension: *Dimension, entity: *Entity) void {
+    const state = entity.getTraitState(ItemEntityTrait) orelse return;
+    const conduit = dimension.world.conduit;
+
+    var stream = BinaryStream.init(conduit.allocator, null, null);
+    defer stream.deinit();
+
+    const packet = Protocol.AddItemActorPacket{
+        .uniqueEntityId = entity.unique_id,
+        .runtimeEntityId = @bitCast(entity.runtime_id),
+        .item = state.stack.toNetworkStack(),
+        .position = entity.position,
+        .velocity = entity.motion,
+    };
+    const serialized = packet.serialize(&stream, conduit.allocator) catch return;
+
+    const snapshots = conduit.getPlayerSnapshots();
+    for (snapshots) |player| {
+        if (!player.spawned) continue;
+        conduit.network.sendPacket(player.connection, serialized) catch {};
+    }
+}
+
+fn tryMergeNearbyGrounded(dimension: *Dimension, entity: *Entity, state: *const State, incoming_grounded: bool) ?*Entity {
     var it = dimension.entities.valueIterator();
     while (it.next()) |ent| {
         const other = ent.*;
+        if (other == entity) continue;
         if (!std.mem.eql(u8, other.entity_type.identifier, "minecraft:item")) continue;
         const other_state = other.getTraitState(ItemEntityTrait) orelse continue;
-        if (other_state.pending_remove) continue;
-        if (!std.mem.eql(u8, other_state.item_identifier, identifier)) continue;
+        const other_gravity = other.getTraitState(GravityTrait) orelse continue;
 
-        const item_type = ItemType.get(identifier) orelse continue;
-        if (other_state.count + count > item_type.max_stack_size) continue;
+        const dist = other.position.distance(entity.position);
+        if (!canMergeGroundedItems(&other_state.stack, other_state.pending_remove, other_gravity.on_ground, &state.stack, incoming_grounded, dist)) continue;
 
-        const dist = other.position.distance(position);
-        if (dist > MERGE_DISTANCE) continue;
-
-        other_state.count += count;
         return other;
     }
     return null;
 }
 
+fn onDetach(state: *State, _: *Entity) void {
+    state.stack.deinit();
+}
+
 pub const ItemEntityTrait = EntityTrait(State, .{
     .identifier = "item_entity",
     .onTick = onTick,
+    .onDetach = onDetach,
 });
+
+test "grounded item merge rejects airborne items" {
+    const stone = ItemStack.fromIdentifier(std.testing.allocator, "minecraft:stone", .{ .stackSize = 1 }) orelse return error.TestUnexpectedResult;
+    defer {
+        var item = stone;
+        item.deinit();
+    }
+
+    const other = ItemStack.fromIdentifier(std.testing.allocator, "minecraft:stone", .{ .stackSize = 1 }) orelse return error.TestUnexpectedResult;
+    defer {
+        var item = other;
+        item.deinit();
+    }
+
+    try std.testing.expect(!canMergeGroundedItems(&stone, false, false, &other, true, 0.5));
+    try std.testing.expect(!canMergeGroundedItems(&stone, false, true, &other, false, 0.5));
+}
+
+test "grounded item merge accepts compatible grounded items in range" {
+    const stone = ItemStack.fromIdentifier(std.testing.allocator, "minecraft:stone", .{ .stackSize = 1 }) orelse return error.TestUnexpectedResult;
+    defer {
+        var item = stone;
+        item.deinit();
+    }
+
+    const other = ItemStack.fromIdentifier(std.testing.allocator, "minecraft:stone", .{ .stackSize = 1 }) orelse return error.TestUnexpectedResult;
+    defer {
+        var item = other;
+        item.deinit();
+    }
+
+    try std.testing.expect(canMergeGroundedItems(&stone, false, true, &other, true, 0.5));
+}

@@ -1,7 +1,16 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Conduit = @import("conduit").Conduit;
 
+const winmm = if (builtin.os.tag == .windows) struct {
+    extern "winmm" fn timeBeginPeriod(uPeriod: c_uint) callconv(.winapi) c_uint;
+    extern "winmm" fn timeEndPeriod(uPeriod: c_uint) callconv(.winapi) c_uint;
+} else struct {};
+
 pub fn main() !void {
+    if (builtin.os.tag == .windows) {
+        _ = winmm.timeBeginPeriod(1);
+    }
     const is_debug = @import("builtin").mode == .Debug;
 
     if (is_debug) {

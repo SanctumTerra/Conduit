@@ -26,10 +26,16 @@ const handleItemStackRequest = @import("./handlers/item-stack-request.zig").hand
 const handlePlayerAction = @import("./handlers/player-action.zig").handlePlayerAction;
 const handleCommandRequest = @import("./handlers/command-request.zig").handleCommandRequest;
 const handleBlockPickRequest = @import("./handlers/block-pick-request.zig").handleBlockPickRequest;
+const PlayerLog = @import("./player-log.zig");
 
 const QueuedPacket = struct {
     conn: *Raknet.Connection,
     payload: []u8,
+};
+
+const PacketDrainResult = struct {
+    processed: usize,
+    remaining: usize,
 };
 
 pub const NetworkHandler = struct {
@@ -64,7 +70,7 @@ pub const NetworkHandler = struct {
     pub fn onDisconnect(connection: *Raknet.Connection, context: ?*anyopaque) void {
         const self = @as(*NetworkHandler, @ptrCast(@alignCast(context)));
         const player = self.conduit.getPlayerByConnection(connection) orelse return;
-        Raknet.Logger.INFO("Player {s} has disconnected.", .{player.username});
+        PlayerLog.logDisconnect(player.username);
         player.disconnect(null) catch |err| {
             Raknet.Logger.ERROR("Failed to disconnect player: {any}", .{err});
         };
@@ -80,18 +86,57 @@ pub const NetworkHandler = struct {
         };
     }
 
-    pub fn drainPackets(self: *NetworkHandler) void {
+    pub fn drainPackets(self: *NetworkHandler, budget_ns: u64, max_packets: usize) PacketDrainResult {
         self.packet_queue_mutex.lock();
         var queue = self.packet_queue;
         self.packet_queue = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 };
         self.packet_queue_mutex.unlock();
-        defer queue.deinit(self.allocator);
-        for (queue.items) |entry| {
+
+        const drain_start = std.time.nanoTimestamp();
+        var processed: usize = 0;
+        var remaining_start: usize = queue.items.len;
+
+        while (processed < queue.items.len) : (processed += 1) {
+            if (processed >= max_packets) break;
+            const elapsed: u64 = @intCast(@max(0, std.time.nanoTimestamp() - drain_start));
+            if (elapsed >= budget_ns) break;
+
+            const entry = queue.items[processed];
             defer self.allocator.free(entry.payload);
             self.onGamePacket(entry.conn, entry.payload) catch |err| {
                 Raknet.Logger.ERROR("Failed to handle encapsulated {any}", .{err});
             };
         }
+
+        remaining_start = processed;
+        if (remaining_start < queue.items.len) {
+            self.packet_queue_mutex.lock();
+            defer self.packet_queue_mutex.unlock();
+
+            var merged = std.ArrayList(QueuedPacket){ .items = &.{}, .capacity = 0 };
+            merged.ensureTotalCapacity(self.allocator, (queue.items.len - remaining_start) + self.packet_queue.items.len) catch {
+                for (queue.items[remaining_start..]) |entry| self.allocator.free(entry.payload);
+                queue.deinit(self.allocator);
+                return .{ .processed = processed, .remaining = self.packet_queue.items.len };
+            };
+            merged.appendSlice(self.allocator, queue.items[remaining_start..]) catch {
+                for (queue.items[remaining_start..]) |entry| self.allocator.free(entry.payload);
+                queue.deinit(self.allocator);
+                return .{ .processed = processed, .remaining = self.packet_queue.items.len };
+            };
+            merged.appendSlice(self.allocator, self.packet_queue.items) catch {
+                for (queue.items[remaining_start..]) |entry| self.allocator.free(entry.payload);
+                merged.deinit(self.allocator);
+                queue.deinit(self.allocator);
+                return .{ .processed = processed, .remaining = self.packet_queue.items.len };
+            };
+
+            if (self.packet_queue.capacity > 0) self.packet_queue.deinit(self.allocator);
+            self.packet_queue = merged;
+        }
+
+        queue.deinit(self.allocator);
+        return .{ .processed = processed, .remaining = self.packet_queue.items.len };
     }
 
     pub fn onGamePacket(self: *NetworkHandler, conn: *Raknet.Connection, payload: []const u8) !void {

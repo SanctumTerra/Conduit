@@ -5,6 +5,7 @@ const Protocol = @import("protocol");
 const NetworkHandler = @import("../network-handler.zig").NetworkHandler;
 const Player = @import("../../player/player.zig").Player;
 const Events = @import("../../events/root.zig");
+const PlayerLog = @import("../player-log.zig");
 
 pub fn handleLogin(
     network: *NetworkHandler,
@@ -122,7 +123,7 @@ pub fn handleLogin(
     }
 
     try network.conduit.addPlayer(player);
-    Raknet.Logger.INFO("Player {s} xuid: {s} logged in.", .{ data.identity_data.display_name, data.identity_data.xuid });
+    PlayerLog.logJoin(data.identity_data.display_name);
 
     {
         var str = BinaryStream.init(network.allocator, null, null);

@@ -135,6 +135,9 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(zlib_dep.artifact("z"));
     exe.linkLibrary(leveldb_lib);
     exe.linkLibCpp();
+    if (is_windows) {
+        exe.linkSystemLibrary("winmm");
+    }
     // exe.root_module.strip = true;
     b.installArtifact(exe);
 
@@ -148,7 +151,32 @@ pub fn build(b: *std.Build) void {
 
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
     const run_exe_tests = b.addRunArtifact(exe_tests);
+    const chest_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/conduit/chest-test-root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "BinaryStream", .module = binarystream_mod },
+            .{ .name = "Raknet", .module = raknet_mod },
+            .{ .name = "protocol", .module = protocol_mod },
+            .{ .name = "nbt", .module = nbt_mod },
+            .{ .name = "leveldb", .module = leveldb_mod },
+        },
+    });
+    chest_test_mod.linkLibrary(zlib_dep.artifact("z"));
+    if (is_windows) {
+        chest_test_mod.linkSystemLibrary("psapi", .{});
+    }
+    const chest_tests = b.addTest(.{ .root_module = chest_test_mod });
+    chest_tests.linkLibrary(leveldb_lib);
+    chest_tests.linkLibrary(zlib_dep.artifact("z"));
+    chest_tests.linkLibCpp();
+    const run_chest_tests = b.addRunArtifact(chest_tests);
 
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_chest_tests.step);
+
+    const chest_test_step = b.step("test-chest", "Run chest regression tests");
+    chest_test_step.dependOn(&run_chest_tests.step);
 }

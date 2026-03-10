@@ -53,6 +53,9 @@ pub const State = struct {
     tick_count: u64,
 };
 
+var last_memory_sample_tick: u64 = 0;
+var cached_memory_mb: f64 = 0;
+
 fn getPlayer(entity: *Entity) ?*Player {
     if (!std.mem.eql(u8, entity.entity_type.identifier, "minecraft:player")) return null;
     return @fieldParentPtr("entity", entity);
@@ -60,15 +63,30 @@ fn getPlayer(entity: *Entity) ?*Player {
 
 fn onTick(state: *State, entity: *Entity) void {
     state.tick_count += 1;
-    if (state.tick_count % 20 != 0) return;
 
     const player = getPlayer(entity) orelse return;
-    const tps = player.network.conduit.current_tps;
-    const mem = getMemoryMB();
-    const tasks = player.network.conduit.tasks.pending();
+    const conduit: *Conduit = player.network.conduit;
+    const player_count = conduit.getPlayerCount();
+    const update_interval: u64 = if (player_count <= 8)
+        20
+    else if (player_count <= 32)
+        40
+    else
+        100;
+    if (state.tick_count % update_interval != 0) return;
 
-    var buf: [128]u8 = undefined;
-    const text = std.fmt.bufPrint(&buf, "§aTPS: §f{d:.1} §8| §aMem: §f{d:.1}MB §8| §aTasks: §f{d}", .{ tps, mem, tasks }) catch return;
+    const tps = conduit.current_tps;
+    const target_tps = conduit.targetTps();
+    const mspt = conduit.current_mspt;
+    if (last_memory_sample_tick != conduit.tick_count) {
+        cached_memory_mb = getMemoryMB();
+        last_memory_sample_tick = conduit.tick_count;
+    }
+    const mem = cached_memory_mb;
+    const tasks = conduit.tasks.pending();
+
+    var buf: [160]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf, "§aTPS: §f{d:.1}§8/§f{d:.1} §8| §aMSPT: §f{d:.2} §8| §aMem: §f{d:.1}MB §8| §aTasks: §f{d}", .{ tps, target_tps, mspt, mem, tasks }) catch return;
 
     var stream = BinaryStream.init(player.entity.allocator, null, null);
     defer stream.deinit();

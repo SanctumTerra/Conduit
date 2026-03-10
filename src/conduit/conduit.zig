@@ -32,6 +32,10 @@ const ItemPalette = @import("./items/item-palette.zig");
 const CreativeContentLoader = @import("./items/creative-content-loader.zig");
 const TaskQueue = @import("./tasks/tasks.zig").TaskQueue;
 const ThreadedTaskQueue = @import("./tasks/threaded-tasks.zig").ThreadedTaskQueue;
+const WorkerCountResolution = @import("./tasks/threaded-tasks.zig").WorkerCountResolution;
+const resolveWorkerCount = @import("./tasks/threaded-tasks.zig").resolveWorkerCount;
+const totalServerThreadCount = @import("./tasks/threaded-tasks.zig").totalServerThreadCount;
+const shouldEmitVerboseStartupLogs = @import("./config.zig").shouldEmitVerboseStartupLogs;
 const TickProfiler = @import("./tick-profiler.zig").TickProfiler;
 const BanManager = @import("./network/ban-manager.zig").BanManager;
 const PermissionManager = @import("./player/permission-manager.zig").PermissionManager;
@@ -52,8 +56,15 @@ pub const Conduit = struct {
     serialized_item_registry: ?[]const u8,
     tick_count: u64 = 0,
     work_time_accumulator: u64 = 0,
+    raknet_time_accumulator: u64 = 0,
+    tick_interval_accumulator: u64 = 0,
+    tick_interval_samples: u64 = 0,
     tasks_time_accumulator: u64 = 0,
     current_tps: f64 = 20.0,
+    current_mspt: f64 = 0.0,
+    current_raknet_mspt: f64 = 0.0,
+    current_game_mspt: f64 = 0.0,
+    last_tick_started_at: ?i128 = null,
     tasks: TaskQueue,
     threaded_tasks: ThreadedTaskQueue,
     profiler: TickProfiler,
@@ -94,8 +105,12 @@ pub const Conduit = struct {
             .creative_content = null,
             .serialized_item_registry = null,
             .network = undefined,
+            .current_tps = @as(f64, @floatFromInt(@max(@as(u32, 1), config.max_tps))),
+            .current_mspt = 1000.0 / @as(f64, @floatFromInt(@max(@as(u32, 1), config.max_tps))),
+            .current_raknet_mspt = 0.0,
+            .current_game_mspt = 0.0,
             .tasks = TaskQueue.init(allocator),
-            .threaded_tasks = ThreadedTaskQueue.init(allocator),
+            .threaded_tasks = ThreadedTaskQueue.init(allocator, config.worker_threads),
             .profiler = .{},
             .command_registry = CommandRegistry.init(allocator),
             .ban_manager = BanManager.init(allocator, "banned-players.json"),
@@ -111,7 +126,9 @@ pub const Conduit = struct {
         try UpperBlockTrait.registerForState("upper_block_bit");
         try OpenBitTrait.registerForState("open_bit");
         const count = try loadBlockPermutations(self.allocator);
-        Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
+        if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
+            Raknet.Logger.INFO("Loaded {d} block permutations", .{count});
+        }
         try BlockPermutation.initNbtHashLookup(self.allocator);
 
         EntityTraits.initEntityTraitRegistry(self.allocator);
@@ -120,7 +137,9 @@ pub const Conduit = struct {
 
         try ItemPalette.initRegistry(self.allocator);
         const item_count = try ItemPalette.loadItemTypes(self.allocator);
-        Raknet.Logger.INFO("Loaded {d} item types", .{item_count});
+        if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
+            Raknet.Logger.INFO("Loaded {d} item types", .{item_count});
+        }
         {
             const entries = try ItemPalette.getItemRegistry(self.allocator);
             defer self.allocator.free(entries);
@@ -129,18 +148,24 @@ pub const Conduit = struct {
             const pkt = Protocol.ItemRegistryPacket{ .entries = entries };
             const raw = try pkt.serialize(&stream);
             self.serialized_item_registry = try self.allocator.dupe(u8, raw);
-            Raknet.Logger.INFO("Pre-serialized item registry ({d} bytes)", .{self.serialized_item_registry.?.len});
+            if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
+                Raknet.Logger.INFO("Pre-serialized item registry ({d} bytes)", .{self.serialized_item_registry.?.len});
+            }
         }
 
         const entity_type_count = try EntityTypeRegistry.initRegistry(self.allocator);
-        Raknet.Logger.INFO("Loaded {d} entity types", .{entity_type_count});
+        if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
+            Raknet.Logger.INFO("Loaded {d} entity types", .{entity_type_count});
+        }
 
         self.creative_content = CreativeContentLoader.loadCreativeContent(self.allocator) catch |err| blk: {
             Raknet.Logger.ERROR("Failed to load creative content: {any}", .{err});
             break :blk null;
         };
         if (self.creative_content) |cc| {
-            Raknet.Logger.INFO("Loaded {d} creative groups and {d} creative items", .{ cc.group_count, cc.item_count });
+            if (shouldEmitVerboseStartupLogs(@import("builtin").mode)) {
+                Raknet.Logger.INFO("Loaded {d} creative groups and {d} creative items", .{ cc.group_count, cc.item_count });
+            }
         }
 
         if (std.fs.cwd().openDir("worlds", .{ .iterate = true })) |worlds_dir_val| {
@@ -207,7 +232,22 @@ pub const Conduit = struct {
         try @import("./command/list/world.zig").register(&self.command_registry, self);
 
         self.raknet.setTickCallback(onTick, self);
+        const worker_resolution: WorkerCountResolution = resolveWorkerCount(self.config.worker_threads);
         try self.threaded_tasks.start();
+        if (!worker_resolution.auto_selected and worker_resolution.resolved_count < worker_resolution.requested_count) {
+            Raknet.Logger.WARN(
+                "Configured worker-threads={d} exceeds recommended max for {d} CPUs, clamping to {d}",
+                .{
+                    worker_resolution.requested_count,
+                    worker_resolution.cpu_count,
+                    worker_resolution.resolved_count,
+                },
+            );
+        }
+        Raknet.Logger.INFO("Loaded {d} threads, {d} worker threads available", .{
+            totalServerThreadCount(self.threaded_tasks.workerCount()),
+            self.threaded_tasks.workerCount(),
+        });
         var event = Events.types.ServerStartEvent{};
         _ = self.events.emit(Events.Event.ServerStart, &event);
 
@@ -286,15 +326,39 @@ pub const Conduit = struct {
         return self.players.count();
     }
 
+    pub fn targetTps(self: *const Conduit) f64 {
+        return @as(f64, @floatFromInt(@max(@as(u32, 1), self.config.max_tps)));
+    }
+
     fn onTick(context: ?*anyopaque) void {
         const self = @as(*Conduit, @ptrCast(@alignCast(context)));
         const work_start = std.time.nanoTimestamp();
-        const tick_budget_ns: u64 = std.time.ns_per_s / @as(u64, self.config.max_tps);
+        const target_tps_u64 = @max(@as(u64, 1), @as(u64, self.config.max_tps));
+        const tick_budget_ns: u64 = std.time.ns_per_s / target_tps_u64;
+        const metrics_window_ticks = target_tps_u64;
         self.profiler.tick_budget_ns = tick_budget_ns;
+
+        if (self.last_tick_started_at) |last_tick_started_at| {
+            const interval_ns: u64 = @intCast(@max(0, work_start - last_tick_started_at));
+            self.tick_interval_accumulator += interval_ns;
+            self.tick_interval_samples += 1;
+        }
+        self.last_tick_started_at = work_start;
 
         self.tick_count += 1;
 
-        self.network.drainPackets();
+        const raknet_ns = self.raknet.last_connection_tick_ns;
+        self.raknet_time_accumulator += raknet_ns;
+        self.profiler.record(.raknet_tick, raknet_ns);
+
+        const packet_drain_budget = tick_budget_ns * 20 / 100;
+        const packet_drain = self.network.drainPackets(packet_drain_budget, 64);
+        if (packet_drain.remaining > 256 and self.tick_count % target_tps_u64 == 0) {
+            Raknet.Logger.WARN("Network packet backlog: processed={d} remaining={d}", .{
+                packet_drain.processed,
+                packet_drain.remaining,
+            });
+        }
 
         var phase_start = std.time.nanoTimestamp();
         const snapshots = self.getPlayerSnapshots();
@@ -340,20 +404,37 @@ pub const Conduit = struct {
         self.profiler.record(.drain_completed_2, @intCast(@max(0, phase_end - phase_start)));
 
         const work_ns: u64 = @intCast(@max(0, std.time.nanoTimestamp() - work_start));
+        const total_tick_ns = raknet_ns + work_ns;
         self.work_time_accumulator += work_ns;
-        self.profiler.recordTick(work_ns);
+        self.profiler.recordTick(total_tick_ns);
 
-        if (self.tick_count % 20 == 0) {
-            const avg_work_ns = self.work_time_accumulator / 20;
+        if (self.tick_count % metrics_window_ticks == 0) {
+            const avg_work_ns = self.work_time_accumulator / metrics_window_ticks;
+            const avg_raknet_ns = self.raknet_time_accumulator / metrics_window_ticks;
+            const avg_interval_ns = if (self.tick_interval_samples > 0)
+                self.tick_interval_accumulator / self.tick_interval_samples
+            else
+                0;
             self.work_time_accumulator = 0;
+            self.raknet_time_accumulator = 0;
             self.tasks_time_accumulator = 0;
 
-            if (avg_work_ns >= tick_budget_ns) {
-                const work_s: f64 = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000_000.0;
-                self.current_tps = @min(20.0, 1.0 / work_s);
+            self.current_game_mspt = @as(f64, @floatFromInt(avg_work_ns)) / 1_000_000.0;
+            self.current_raknet_mspt = @as(f64, @floatFromInt(avg_raknet_ns)) / 1_000_000.0;
+            self.current_mspt = @as(f64, @floatFromInt(avg_work_ns + avg_raknet_ns)) / 1_000_000.0;
+
+            if (avg_interval_ns > 0) {
+                const interval_s = @as(f64, @floatFromInt(avg_interval_ns)) / 1_000_000_000.0;
+                self.current_tps = if (interval_s > 0.0)
+                    @min(self.targetTps(), 1.0 / interval_s)
+                else
+                    self.targetTps();
             } else {
-                self.current_tps = 20.0;
+                self.current_tps = self.targetTps();
             }
+
+            self.tick_interval_accumulator = 0;
+            self.tick_interval_samples = 0;
         }
 
         if (self.tick_count % 6000 == 0) {

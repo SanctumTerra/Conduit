@@ -1,5 +1,8 @@
 const std = @import("std");
-const CompoundTag = @import("nbt").CompoundTag;
+const BinaryStream = @import("BinaryStream").BinaryStream;
+const NBT = @import("nbt");
+const CompoundTag = NBT.CompoundTag;
+const ReadWriteOptions = NBT.ReadWriteOptions;
 const Protocol = @import("protocol");
 const ItemType = @import("./item-type.zig").ItemType;
 const trait_mod = @import("./trait.zig");
@@ -41,6 +44,20 @@ pub const ItemStack = struct {
     pub fn fromIdentifier(allocator: std.mem.Allocator, identifier: []const u8, opts: Options) ?ItemStack {
         const item_type = ItemType.get(identifier) orelse return null;
         return init(allocator, item_type, opts);
+    }
+
+    pub fn cloneWithCount(self: *const ItemStack, allocator: std.mem.Allocator, count: u16) !ItemStack {
+        return init(allocator, self.item_type, .{
+            .stackSize = count,
+            .metadata = self.metadata,
+            .nbt = if (self.nbt) |*nbt| try cloneCompound(allocator, nbt) else null,
+        });
+    }
+
+    pub fn isStackCompatible(self: *const ItemStack, other: *const ItemStack) bool {
+        if (self.item_type != other.item_type) return false;
+        if (self.metadata != other.metadata) return false;
+        return equalOptionalCompound(self.allocator, self.nbt, other.nbt);
     }
 
     pub fn deinit(self: *ItemStack) void {
@@ -149,3 +166,27 @@ pub const ItemStack = struct {
         };
     }
 };
+
+fn cloneCompound(allocator: std.mem.Allocator, src: *const CompoundTag) !CompoundTag {
+    var stream = BinaryStream.init(allocator, null, null);
+    defer stream.deinit();
+    try CompoundTag.write(&stream, src, ReadWriteOptions.default);
+    var read_stream = BinaryStream.init(allocator, stream.getBuffer(), null);
+    defer read_stream.deinit();
+    return try CompoundTag.read(&read_stream, allocator, ReadWriteOptions.default);
+}
+
+fn equalOptionalCompound(allocator: std.mem.Allocator, a: ?CompoundTag, b: ?CompoundTag) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+
+    var a_stream = BinaryStream.init(allocator, null, null);
+    defer a_stream.deinit();
+    CompoundTag.write(&a_stream, &a.?, ReadWriteOptions.default) catch return false;
+
+    var b_stream = BinaryStream.init(allocator, null, null);
+    defer b_stream.deinit();
+    CompoundTag.write(&b_stream, &b.?, ReadWriteOptions.default) catch return false;
+
+    return std.mem.eql(u8, a_stream.getBuffer(), b_stream.getBuffer());
+}

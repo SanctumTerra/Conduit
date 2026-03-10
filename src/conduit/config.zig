@@ -1,13 +1,19 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Raknet = @import("Raknet");
 
+pub fn shouldEmitVerboseStartupLogs(mode: std.builtin.OptimizeMode) bool {
+    return mode == .Debug;
+}
+
 pub const ServerProperties = struct {
-    address: []const u8 = "127.0.0.1",
+    address: []const u8 = "0.0.0.0",
     port: u16 = 19132,
     motd: []const u8 = "Conduit Server",
     max_players: u32 = 120,
     online_mode: bool = true,
     max_tps: u32 = 20,
+    worker_threads: u32 = 0,
     max_view_distance: u32 = 16,
     simulation_distance: u32 = 4,
     default_group: []const u8 = "operator",
@@ -22,6 +28,7 @@ pub const ServerProperties = struct {
         .max_players = "Max Player count on the server",
         .online_mode = "Whether to use online mode (WIP)",
         .max_tps = "Max tps",
+        .worker_threads = "Conduit worker threads (0 = auto, higher values are clamped)",
         .max_view_distance = "Max view distance in chunks",
         .simulation_distance = "Simulation distance in chunks (chunks within this range are kept loaded)",
         .default_group = "Default permission group for new players",
@@ -32,7 +39,9 @@ pub const ServerProperties = struct {
 
         const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
             error.FileNotFound => {
-                Raknet.Logger.INFO("server.properties not found, creating with defaults", .{});
+                if (shouldEmitVerboseStartupLogs(builtin.mode)) {
+                    Raknet.Logger.INFO("server.properties not found, creating with defaults", .{});
+                }
                 try self.save(path);
                 return self;
             },
@@ -40,7 +49,9 @@ pub const ServerProperties = struct {
         };
         defer file.close();
 
-        Raknet.Logger.INFO("Loading server.properties", .{});
+        if (shouldEmitVerboseStartupLogs(builtin.mode)) {
+            Raknet.Logger.INFO("Loading server.properties", .{});
+        }
         const content = try file.readToEndAlloc(allocator, 1024 * 64);
         defer allocator.free(content);
 
@@ -133,3 +144,10 @@ pub const ServerProperties = struct {
         self._allocated_strings.deinit(self.allocator);
     }
 };
+
+test "verbose startup logs are disabled in release modes" {
+    try std.testing.expect(shouldEmitVerboseStartupLogs(.Debug));
+    try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseFast));
+    try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseSafe));
+    try std.testing.expect(!shouldEmitVerboseStartupLogs(.ReleaseSmall));
+}

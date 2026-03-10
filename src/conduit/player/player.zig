@@ -17,6 +17,33 @@ const CursorTrait = @import("../entity/traits/cursor.zig").CursorTrait;
 const Display = @import("../items/traits/display.zig");
 const DisplayTrait = Display.DisplayTrait;
 
+pub const PLAYER_EYE_HEIGHT: f32 = 1.62;
+pub const DROP_HEIGHT_ABOVE_FEET: f32 = 1.3;
+pub const DROP_FORWARD_SPEED: f32 = 0.4;
+
+pub fn internalToWorldFeetPosition(pos: Protocol.Vector3f) Protocol.Vector3f {
+    return Protocol.Vector3f.init(pos.x, pos.y - PLAYER_EYE_HEIGHT, pos.z);
+}
+
+pub fn worldFeetToInternalPosition(pos: Protocol.Vector3f) Protocol.Vector3f {
+    return Protocol.Vector3f.init(pos.x, pos.y + PLAYER_EYE_HEIGHT, pos.z);
+}
+
+pub fn playerDropSpawnPosition(pos: Protocol.Vector3f) Protocol.Vector3f {
+    const feet = internalToWorldFeetPosition(pos);
+    return Protocol.Vector3f.init(feet.x, feet.y + DROP_HEIGHT_ABOVE_FEET, feet.z);
+}
+
+pub fn playerDropVelocity(rotation: Protocol.Vector2f) Protocol.Vector3f {
+    const yaw = rotation.y * std.math.pi / 180.0;
+    const pitch = rotation.x * std.math.pi / 180.0;
+    return Protocol.Vector3f.init(
+        -@sin(yaw) * @cos(pitch) * DROP_FORWARD_SPEED,
+        -@sin(pitch) * DROP_FORWARD_SPEED,
+        @cos(yaw) * @cos(pitch) * DROP_FORWARD_SPEED,
+    );
+}
+
 pub const Player = struct {
     entity: Entity,
     connection: *Raknet.Connection,
@@ -31,6 +58,7 @@ pub const Player = struct {
     sent_chunks: std.AutoHashMap(i64, void),
     visible_players: std.AutoHashMap(i64, void),
     spawned: bool = false,
+    join_startup_started: bool = false,
     pending_dimension: ?*Dimension = null,
     opened_container: ?*Container = null,
     block_target: ?Protocol.BlockPosition = null,
@@ -116,6 +144,8 @@ pub const Player = struct {
 
         self.savePlayerData();
         self.network.conduit.tasks.cancelByOwner("chunk_streaming", self.entity.runtime_id, ChunkLoadingTrait.destroyStreamState);
+        self.network.conduit.tasks.cancelByOwner("join_startup", self.entity.runtime_id, null);
+        self.network.conduit.tasks.cancelByOwner("player_init", self.entity.runtime_id, null);
         self.releaseChunks();
 
         const allocator = self.entity.allocator;
@@ -181,6 +211,8 @@ pub const Player = struct {
     pub fn transferToDimension(self: *Player, dimension: *Dimension) void {
         self.savePlayerData();
         self.network.conduit.tasks.cancelByOwner("chunk_streaming", self.entity.runtime_id, ChunkLoadingTrait.destroyStreamState);
+        self.network.conduit.tasks.cancelByOwner("join_startup", self.entity.runtime_id, null);
+        self.network.conduit.tasks.cancelByOwner("player_init", self.entity.runtime_id, null);
         self.releaseChunks();
         if (self.entity.getTraitState(ChunkLoadingTrait.ChunkLoadingTrait)) |state| {
             const s: *ChunkLoadingTrait.State = @ptrCast(@alignCast(state));
@@ -243,7 +275,7 @@ pub const Player = struct {
     }
 
     pub fn onSpawn(self: *Player) !void {
-        Raknet.Logger.INFO("Player {s} has spawned.", .{self.username});
+        Raknet.Logger.DEBUG("Player {s} has spawned.", .{self.username});
 
         if (self.entity.getTraitState(InventoryTrait)) |state| {
             var s: *InventoryTrait.TraitState = state;
@@ -302,15 +334,6 @@ pub const Player = struct {
 
             s.container.setItem(2, item);
             s.container.update();
-        }
-
-        {
-            const EntityTypeRegistry = @import("../entity/entity-type-registry.zig").EntityTypeRegistry;
-            const dimension = self.entity.dimension orelse return;
-            if (EntityTypeRegistry.get("minecraft:zombie")) |zombie_type| {
-                const pos = self.entity.position;
-                _ = dimension.spawnEntity(zombie_type, Protocol.Vector3f.init(pos.x + 3, pos.y, pos.z + 3)) catch return;
-            }
         }
 
         // {
@@ -378,3 +401,11 @@ pub const Player = struct {
         ChunkLoadingTrait.queueChunkStreaming(self) catch {};
     }
 };
+
+test "player drop velocity matches pocketmine direction toss" {
+    const vel = playerDropVelocity(Protocol.Vector2f.init(0, 0));
+
+    try std.testing.expectApproxEqAbs(@as(f32, 0), vel.x, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), vel.y, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.4), vel.z, 0.0001);
+}

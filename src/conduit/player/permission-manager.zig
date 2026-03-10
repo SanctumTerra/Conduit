@@ -1,5 +1,7 @@
 const std = @import("std");
 const Raknet = @import("Raknet");
+const shouldEmitVerboseStartupLogs = @import("../config.zig").shouldEmitVerboseStartupLogs;
+const builtin = @import("builtin");
 
 pub const PermissionGroup = struct {
     name: []const u8,
@@ -167,7 +169,9 @@ pub const PermissionManager = struct {
             }
         }
 
-        Raknet.Logger.INFO("Loaded {d} permission groups, {d} player assignments", .{ self.groups.count(), self.player_groups.count() });
+        if (shouldEmitVerboseStartupLogs(builtin.mode)) {
+            Raknet.Logger.INFO("Loaded {d} permission groups, {d} player assignments", .{ self.groups.count(), self.player_groups.count() });
+        }
     }
 
     fn save(self: *PermissionManager) void {
